@@ -38,51 +38,56 @@ books={}
 for _,row in df.iterrows():
     books[row['uuid']]=row['name']
     
-df=pd.read_sql_query('select * from TBL_TRADEINFO where date>1530431509 order by date',conn)
+df=pd.read_sql_query('select * from TBL_TRADEINFO where date>0 order by date',conn)
 
 dd_1=[]
 dd_2=[]
 dd_3=[]
 
 for _,row in df.iterrows():
-    if row['isdelete']==1:
+    try:
+        if row['isdelete']==1:
+            continue
+        
+        book=books[row['bookUuid']]
+        account=accounts[row['accountUuid']]
+        pos=account.find('-')
+        fee_type='人民币'
+        if pos!=-1:
+            fee_type=account[pos+1:]
+            account=account[:pos]
+        dd=datetime.fromtimestamp(row['date']).strftime('%Y-%m-%d %H:%M:%S')
+        #print(book,account)
+
+        tradetype=row['tradetype']
+        if tradetype==1:
+            # outcome
+            maintyp=outgomaintype[outgosubtomain[row['typeUuid']]]
+            subtyp=outgosubtype[row['typeUuid']]
+            dd_1.append((maintyp, subtyp, account, fee_type, '日常', '', 
+                  '非报销', dd, '%.2f'%(float(row['money'])/100),
+                  '', row['comment'] or '', book))
+        elif tradetype==2:
+            # income
+            typ=incomemaintype[row['typeUuid']]
+            dd_2.append((typ, account, fee_type, '日常', '', 
+                  dd, '%.2f'%(float(row['money'])/100),
+                  '', row['comment'] or '', book))
+        elif tradetype==3:
+            account2=accounts[row['accountUuid2']]
+            pos=account2.find('-')
+            fee_type2='人民币'
+            if pos!=-1:
+                fee_type2=account2[pos+1:]
+                account2=account2[:pos]
+            dd_3.append((account, fee_type, '%.2f'%(float(row['money'])/100),
+                   account2, fee_type2, '%.2f'%(float(row['money2'])/100), dd, row['comment'] or '', book))
+        else:
+            print(row)
+    except Exception as e:
+        print("exception: " + str(e))
         continue
     
-    book=books[row['bookUuid']]
-    account=accounts[row['accountUuid']]
-    pos=account.find('-')
-    fee_type='人民币'
-    if pos!=-1:
-        fee_type=account[pos+1:]
-        account=account[:pos]
-    dd=datetime.fromtimestamp(row['date']).strftime('%Y-%m-%d %H:%M:%S')
-    #print(book,account)
-
-    tradetype=row['tradetype']
-    if tradetype==1:
-        # outcome
-        maintyp=outgomaintype[outgosubtomain[row['typeUuid']]]
-        subtyp=outgosubtype[row['typeUuid']]
-        dd_1.append((maintyp, subtyp, account, fee_type, '日常', '', 
-              '非报销', dd, '%.2f'%(float(row['money'])/100),
-              '', row['comment'] or '', book))
-    elif tradetype==2:
-        # income
-        typ=incomemaintype[row['typeUuid']]
-        dd_2.append((typ, account, fee_type, '日常', '', 
-              dd, '%.2f'%(float(row['money'])/100),
-              '', row['comment'] or '', book))
-    elif tradetype==3:
-        account2=accounts[row['accountUuid2']]
-        pos=account2.find('-')
-        fee_type2='人民币'
-        if pos!=-1:
-            fee_type2=account2[pos+1:]
-            account2=account2[:pos]
-        dd_3.append((account, fee_type, '%.2f'%(float(row['money'])/100),
-               account2, fee_type2, '%.2f'%(float(row['money2'])/100), dd, row['comment'] or '', book))
-    else:
-        print(row)
 
 
 df_1=pd.DataFrame(dd_1,columns=['支出大类','支出小类','账户','币种','项目','商家','报销','消费日期','消费金额','成员金额','备注','账本'])
