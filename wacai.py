@@ -5,6 +5,7 @@ Created on Fri Mar  8 19:32:52 2019
 @author: jasonjsyuan
 """
 
+import xlwt
 import pandas as pd
 import sqlite3
 from datetime import datetime
@@ -32,13 +33,13 @@ accounts = {}
 for _, row in df.iterrows():
     accounts[row['uuid']] = row['name']
 
-df = pd.read_sql_query('select uuid,name from TBL_OUTGOMAINTYPEINFO', conn)
+df = pd.read_sql_query('select uuid,name from TBL_OUTGOCATEGORYINFO', conn)
 outgomaintype = {}
 for _, row in df.iterrows():
     outgomaintype[row['uuid']] = row['name']
 
 df = pd.read_sql_query(
-    'select uuid,name,parentUuid from TBL_OUTGOSUBTYPEINFO', conn)
+    'select uuid,name,parentUuid from TBL_OUTGOCATEGORYINFO', conn)
 outgosubtype = {}
 outgosubtomain = {}
 for _, row in df.iterrows():
@@ -149,12 +150,12 @@ df_borrow = pd.DataFrame(
 df_refund = pd.DataFrame(
     dd_refund, columns=['借贷类型', '借贷时间', '借贷账户', '账户', '金额', '利息', '备注', '账本'])
 
-writer = pd.ExcelWriter('out.xls')
+writer = pd.ExcelWriter('out.xlsx')
 df_outgo.to_excel(writer, sheet_name='支出', index=False)
 df_income.to_excel(writer, sheet_name='收入', index=False)
 df_transfer.to_excel(writer, sheet_name='转账', index=False)
 df_borrow.to_excel(writer, sheet_name='借入借出', index=False)
 df_refund.to_excel(writer, sheet_name='收款还款', index=False)
-writer.save()
+writer.close()
 
 print(accounts)
