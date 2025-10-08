@@ -117,3 +117,4 @@ dmypy.json
 
 *.so
 out.xls
+out.xlsx
