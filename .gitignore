@@ -117,3 +117,5 @@ dmypy.json
 
 *.so
 data/
+intermediate/
+reports/

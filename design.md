@@ -21,29 +21,82 @@
       - 用户可只提供部分渠道文件，工具自动跳过缺失文件。
       - 用户可选择是否启用大模型分类，或提供手工映射表覆盖模型输出。
   - 流程与系统架构
-      1. 数据标准化：扫描 data/，识别可用账单文件（按命名模式或扩展名），调用各渠道解析器。
-          - 每个解析器输出 5 份 DataFrame，对应支出/收入/转账/借入借出/收款还款，列名、顺序与 wacai.xlsx 模板一致，金额采用 Decimal，日期统一为 timezone-aware datetime。
-          - 中间结果写入 CSV（例如 `intermediate/wechat/支出.csv` 等）供调试或作为后续对账输入；所有 CSV 均保持 UTF-8 编码。
-          - 招商信用卡复用 cmb_parser.py；新增微信、支付宝、中信解析器遵循相同接口。
-      2. 自动对账：读取现有 data/wacai.xlsx（或指定基线文件），建立去重索引（金额 + 日期容差 + 渠道或原始 ID）。
-          - 比对新旧数据，标记新增、疑似重复、已存在的条目；输出统计与日志。
-          - 支持 `--dry-run` 仅生成报告，不写回 Excel。
-          - 若发现基线账本中存在“备注=余额调整产生的烂账”或“收入大类=漏记款”记录，则将该条交易时间作为该账户的锁定时间，锁定时间之前的同账户交易视为已核对，不再导入。
-          - 针对退款场景：在同一账期内若发现一笔支出与一笔对等金额（金额取绝对值相等、方向相反）且备注一致的记录（含来源渠道），判定为原交易已退款，两条记录均不再导入，并在报告中记录对应信息。
-      3. 交互导入：通过命令行逐条或按批次确认新增记录。
-          - 提供“全部导入”“跳过本条”“标记待确认”等选项，可用 `--auto-confirm` 开启无交互模式。
-          - 用户确认后写入模板工作表，并记录导入报告（如 reports/import_YYYYMMDD.csv）。
+      1. 渠道文件发现（`discover_channel_files` in `pipeline.py`）
+          - 扫描 `input-dir`，根据渠道枚举的命名片段（如 wechat、alipay、citic、cmb）匹配文件。
+          - 找不到某渠道文件时跳过并在日志中提示，后续流程仅处理已解析的渠道。
+      2. 渠道解析与标准化（`parse_channels` + `wacai_reconcile/parsers/*`）
+          - 逐渠道调用解析器，将原始账单转为 `StandardRecord` 列表；金额使用 `Decimal`，时间统一为上海时区 `datetime`。
+          - 微信、支付宝解析器会过滤银行卡代扣（添加 `non-wallet-payment` 跳过原因），信用卡解析器保留补充信息放入 `meta`。
+          - 若配置了 `intermediate-dir`，`write_intermediate_csv` 会按渠道/Sheet 写出 CSV（例如 `intermediate/wechat/支出.csv`）供人工核查。
+      3. 基线加载与锁定（`load_wacai_workbook` + `build_account_locks`）
+          - 从基线 `wacai.xlsx` 读入各 Sheet DataFrame，缺失的 Sheet 自动补齐空表。
+          - 通过 `build_account_locks` 识别备注为“余额调整产生的烂账”或收入大类为“漏记款”的记录，为对应账户计算锁定日期；锁定时间前的交易将被标记为 `account-locked`。
+      4. 退款配对与去重链路
+          - `apply_refund_pairs`：按配置窗口（默认 30 天）查找金额相反且备注/来源相匹配的记录，命中后两条记为 `canceled`。
+          - `BaselineIndex` + `apply_baseline_dedupe`：对比基线数据（金额容差 + 日期容差 + 备注），命中的记录打上 `duplicate-baseline` 跳过原因。
+          - `supplement_card_remarks`：若信用卡交易可与钱包交易匹配商户与金额，向备注追加“来源补充(...)”说明退款或商品信息。
+      5. 人工确认与导出
+          - 根据 `auto_confirm` 参数选择是否逐条提示接受/跳过；自动模式直接接受所有未被标记为 skipped/canceled 的记录。
+          - `incremental-only` 为真时仅构建增量帧并输出 CSV；否则使用 `SheetBundle` 将新记录合并到基线数据并按日期升序排序。
+          - `write_wacai_workbook` 写出最终 Excel（`{output-prefix}-{timestamp}.xlsx`），同时根据 `report_path` 输出包含所有记录状态的报告 CSV。
+
+  - 详细流程拆解（代码主干逐步说明）
+      1. 输入准备
+          - CLI（`reconcile.py` → `parse_args`）解析路径、容差、模式开关等参数，组装 `ReconcileOptions`。
+          - `ReconcileOptions.resolved_baseline()` 确定基线文件路径，默认 `input-dir/wacai.xlsx`。
+      2. 渠道发现与解析
+          - `discover_channel_files(options.input_dir)` 返回 `{channel: Path}` 映射；匹配规则为 `*{pattern}*`。
+          - `parse_channels(channel_paths)` 依次调用解析器。每条 `StandardRecord` 会写入 `record.meta.channel`、`record.meta.channel_label`，以便后续去重与报告。
+          - 解析器行为要点：
+              * `parsers/wechat.py`：对 `支付方式` 进行钱包/银行卡判定，银行卡支付标记为 `non-wallet-payment` 并留在报告供对账。
+              * `parsers/alipay.py`：同上，同时保留 `花呗`、`余额宝` 等钱包交易。
+              * 信用卡解析器（`citic`, `cmb`）保留账单原始入账日期、卡尾号等信息写入 `record.meta.source_extras`。
+          - 若设置 `intermediate_dir`，`write_intermediate_csv` 会将非 `supplement_only` 的记录写成 CSV，供人工复核或差异追踪。
+      3. 基线加载与账户锁定
+          - `load_wacai_workbook(baseline_path)` 载入基线 Excel，确保五个 Sheet 均存在；缺失 sheet 会创建空 DataFrame，并保留列顺序。
+          - `build_account_locks(baseline_frames)` 扫描基线数据，对于备注、类别符合锁定条件的记录，以交易时间更新账户锁定表 `{account: latest_locked_datetime}`。
+          - `apply_account_locks(all_records, locks)` 遍历增量记录，若交易时间早于锁定时间则打上 `account-locked` 跳过原因。
+      4. 退款、去重与补充说明
+          - `apply_refund_pairs` 使用金额差<=容差、时间差<=窗口、备注/来源匹配作为判定；匹配成功的支出/收入互相标记为 `canceled`。
+          - `BaselineIndex` 以 `(sheet, account, amount, timestamp±容差, remark)` 为 key，`apply_baseline_dedupe` 发现与基线重复即标记为 `duplicate-baseline`。
+          - `supplement_card_remarks` 在信用卡记录备注后追加钱包交易的商品/状态信息，使导出的 Excel 可以直接追溯来源。
+      5. 交互确认与输出
+          - 根据 `auto_confirm` 决定是否逐条输出 `print_record_summary`（包含表名/账户/金额/时间/备注）。
+          - 接受的记录标记 `record.meta.accepted = True`，用于报告统计。
+          - `incremental-only=True` 时调用 `build_increment_frames` 输出仅包含新增记录的 DataFrame；否则 `SheetBundle.update_from_records` 合并基线 + 新记录。
+          - `write_wacai_workbook` 负责落盘 Excel；`write_report`（若指定 `report_path`）输出一份 CSV，记录所有交易的 `status` 和 `reason`。
+          - `reconcile()` 返回 `ReconcileResult`（导出路径、accepted/skipped/canceled/pending 计数以及报告路径），供 CLI 或上层流程汇总。
+
+  - 流程示意图
+
+      ```mermaid
+      flowchart TD
+          A[CLI 参数解析<br/>ReconcileOptions] --> B[发现渠道文件<br/>discover_channel_files]
+          B --> C[解析账单为 StandardRecord<br/>parse_channels]
+          C --> D[写中间 CSV<br/>write_intermediate_csv?]
+          C --> E[载入基线 + 构建锁定<br/>load_wacai_workbook / build_account_locks]
+          E --> F[退款配对<br/>apply_refund_pairs]
+          F --> G[基线去重<br/>apply_baseline_dedupe]
+          G --> H[信用卡备注补充<br/>supplement_card_remarks]
+          H --> I[交互确认<br/>auto_confirm / input loop]
+          I --> J[构建输出帧<br/>SheetBundle 或 build_increment_frames]
+          J --> K[写 Excel<br/>write_wacai_workbook]
+          I --> L[生成报告<br/>write_report]
+      ```
   - 功能需求明细
       - 支持命令行入口：uv run python reconcile.py --input-dir data --output-prefix data/wacai.
       - 允许传入 --llm 配置（模型名称、API Key、批次大小），或 --no-llm 仅依赖规则。
       - 日志输出导入条目数、跳过条目数（按金额去重）、分类成功率、未匹配分类条目列表。
       - 提供配置文件（如 config/categories.yml）维护固定映射：交易号/关键词→模板分类。
-      - 生成后的 Excel 排序按交易时间倒序；保留原币种、汇率信息在备注。
+      - 生成后的 Excel 按交易时间正序排序，保持与原始模板一致；保留原币种、汇率信息在备注。
       - 命令行交互模块基于 argparse + 简单输入提示，后续可集成 prompt-toolkit。
       - 支持 `--report-path` 自定义导入报告输出目录。
       - 输出文件命名规则：根据执行时间生成 `"{output-prefix}-{YYYYMMDDHHMM}.xlsx"`，保留历史版本，不覆盖既有文件。
       - 支持 `--account-lock` 相关设置，控制遇到余额调整或漏记款时的锁定行为（默认启用）。
+      - `--incremental-only` 仅输出增量交易，便于先复核新增条目再决定合并。
       - 支持退款匹配配置（如 `--refund-window 30d`），控制金额相反且备注一致的支出/退款自动抵消逻辑，默认开启并输出匹配日志。
+      - 支付宝渠道仅保留余额/余额宝/花呗等自有账户流水，过滤银行卡代扣记录，避免与信用卡账单重复。
+      - 对银行信用卡账单补充备注：若能在微信/支付宝中匹配到同金额、同商户的记录，则附加来源备注（含退款状态）用于追溯。
   - 非功能要求
       - 解析与分类模块解耦，便于未来新增渠道。
       - 处理 10 万级别交易记录的性能需在 5 分钟内完成。
@@ -73,5 +126,20 @@
       - 模板字段变化：建立单元测试对照 wacai-demo.xls，确保生成结构一致。
 
   该设计文档可作为后续开发、评审和排期的基础。若有新增需求或调整，请继续补充，我会同步更新。
+
+  - 测试与验收标准
+      - 单元测试
+          - `tests/parsers/`：针对微信、支付宝、信用卡解析器构造最小化账单样例，断言输出 `StandardRecord` 字段（金额、时间、渠道标识、跳过原因）。
+          - `tests/pipeline/test_dedupe.py`：构造基线与增量组合，验证 `duplicate-baseline`、`channel-duplicate`、`account-locked` 标记逻辑。
+          - `tests/utils/`：覆盖 `to_decimal`、`normalize_text`、`as_datetime` 等基础工具函数边界情况（空字符串、异常格式、非 ASCII 文本）。
+      - 集成测试
+          - 提供匿名化多渠道夹具（含退款、银行卡代扣、账户锁定场景），执行 `uv run python reconcile.py --input-dir tests/fixtures --output-prefix build/test --auto-confirm --dry-run --report-path build/report.csv`。
+          - 断言输出报告中 accepted/skipped/canceled 数量与预期一致，验证 wallet-card 去重与退款抵消是否生效。
+      - 端到端验收
+          - 使用真实模板 `wacai.xlsx` 复制品作为基线，执行一次完整流程（不带 `--dry-run`），人工检查生成的 Excel 与基线列结构一致，日期排序正确。
+          - 打开导出文件，对比关键示例：支付宝银行卡支付应在报告中标记为 `non-wallet-payment`，中信信用卡对应条目备注包含“来源补充(支付宝/微信)”，退款记录被标记为 `canceled`。
+          - 验证 CLI 交互路径：在未开启 `--auto-confirm` 下，人工选择“跳过”“全部导入”“退出”等分支，确保流程无异常。
+      - 性能验收
+          - 在包含 10 万条交易的夹具上执行全流程，记录总耗时；要求在 MacBook Pro（Apple M 系列/32GB RAM）上 5 分钟以内完成。
 
   codex resume 0199d365-b2e0-77a1-a4ab-fbf3da3854cd
