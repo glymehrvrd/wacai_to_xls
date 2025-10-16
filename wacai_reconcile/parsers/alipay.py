@@ -46,7 +46,8 @@ def parse_alipay(path: Path) -> List[StandardRecord]:
         product = normalize_text(row.get("商品说明"))
         if product:
             remark_items.append(product)
-        note = normalize_text(row.get("备注"))
+        note_raw = row.get("备注")
+        note = "" if pd.isna(note_raw) else normalize_text(note_raw)
         if note:
             remark_items.append(note)
         remark = "; ".join(remark_items)

@@ -149,7 +149,7 @@ def test_supplement_card_remarks_matches_by_remark() -> None:
         remark="订单B",
         source="微信支付",
         channel="wechat",
-        extras={"source_extras": {"支付方式": "零钱", "状态": "支付成功"}},
+        extras={"source_extras": {"支付方式": "中信银行信用卡(1129)", "状态": "支付成功"}},
     )
     card_record = _make_record(
         timestamp=timestamp + timedelta(minutes=5),
@@ -168,3 +168,31 @@ def test_supplement_card_remarks_matches_by_remark() -> None:
     assert "来源补充(" in card_record.row["备注"]
     assert "支付成功" in card_record.row["备注"]
     assert card_record.meta.supplemented_from == "wechat"
+
+
+def test_supplement_card_remarks_skips_when_pay_method_mismatch() -> None:
+    timestamp = datetime(2025, 10, 13, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    wallet_record = _make_record(
+        timestamp=timestamp,
+        account="微信",
+        remark="订单C",
+        source="微信支付",
+        channel="wechat",
+        extras={"source_extras": {"支付方式": "零钱"}},
+    )
+    card_record = _make_record(
+        timestamp=timestamp + timedelta(minutes=3),
+        account="中信银行信用卡(1129)",
+        remark="订单C",
+        source="中信银行信用卡",
+        channel="citic",
+    )
+
+    supplement_card_remarks(
+        [wallet_record, card_record],
+        amount_tolerance=Decimal("0.01"),
+        date_tolerance=timedelta(hours=2),
+    )
+
+    assert "来源补充" not in card_record.row.get("备注", "")
+    assert card_record.meta.supplemented_from is None

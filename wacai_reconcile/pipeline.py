@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
+import json
 
 from .baseline import BaselineIndex, build_account_locks
 from .io_utils import (
@@ -17,9 +18,6 @@ from .io_utils import (
 )
 from .models import SheetBundle, StandardRecord
 from .parsers import parse_alipay, parse_citic, parse_cmb, parse_wechat
-from .parsers.alipay import WALLET_KEYWORDS as ALIPAY_WALLET_KEYWORDS
-from .parsers.base import is_wallet_funded
-from .parsers.wechat import WALLET_KEYWORDS as WECHAT_WALLET_KEYWORDS
 from .refund import apply_refund_pairs
 from .schema import DEFAULT_AMOUNT_TOLERANCE, DEFAULT_DATE_TOLERANCE, DEFAULT_REFUND_WINDOW, SHEET_COLUMNS
 from .time_utils import as_datetime
@@ -63,11 +61,6 @@ CHANNEL_FILES = {
     "cmb": ("招商银行信用卡", parse_cmb, ["招商银行信用卡", "cmb"]),
 }
 
-WALLET_PAYMENT_KEYWORDS = {
-    "wechat": WECHAT_WALLET_KEYWORDS,
-    "alipay": ALIPAY_WALLET_KEYWORDS,
-}
-
 
 def _sanitize_name(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum() or ch in {"-", "_"}).lower() or "channel"
@@ -99,26 +92,6 @@ def parse_channels(channel_paths: Dict[str, Path]) -> Dict[str, List[StandardRec
             record.meta.channel_label = label  # 示例：微信支付
         channel_records[channel] = records
     return channel_records
-
-
-def _collect_wallet_records(records: Iterable[StandardRecord], wallet_channels: set[str]) -> List[StandardRecord]:
-    wallet_records: List[StandardRecord] = []
-    for record in records:
-        channel = record.meta.channel
-        if channel not in wallet_channels:
-            continue
-        if record.canceled:
-            continue
-        pay_method = record.meta.source_extras.get("支付方式", "")
-        keywords = WALLET_PAYMENT_KEYWORDS.get(channel)
-        if keywords and not is_wallet_funded(pay_method, keywords):
-            record.skipped_reason = record.skipped_reason or "non-wallet-payment"
-            record.meta.supplement_only = True
-            continue
-        if record.skipped_reason and not record.meta.supplement_only:
-            continue
-        wallet_records.append(record)
-    return wallet_records
 
 
 def write_intermediate_csv(intermediate_dir: Path, channel: str, records: Iterable[StandardRecord]) -> None:
@@ -162,7 +135,7 @@ def supplement_card_remarks(
     """Enrich card账单备注 with wallet来源备注，便于理解交易含义。"""
     wallet_channels = {"wechat", "alipay"}
     card_channels = {"citic", "cmb"}
-    wallet_records = _collect_wallet_records(records, wallet_channels)
+    wallet_records = [wallet for wallet in records if wallet.meta.channel in wallet_channels and not wallet.canceled]
     wallet_by_remark: Dict[str, List[StandardRecord]] = {}
     for wallet in wallet_records:
         key = wallet.meta.base_remark or wallet.remark
@@ -180,7 +153,13 @@ def supplement_card_remarks(
         base_remark = record.meta.base_remark or record.remark
         if not base_remark:
             continue
+        card_account = record.account
+        account_root = card_account.split("(")[0].strip() if card_account else ""
         for wallet in wallet_by_remark.get(base_remark, []):
+            pay_method = wallet.meta.source_extras.get("支付方式", "")
+            if card_account and card_account not in pay_method:
+                if account_root and account_root not in pay_method:
+                    continue
             status_text = wallet.meta.source_extras.get("状态", "")
             base_text = wallet.meta.base_remark or ""
             base_parts = [part.strip() for part in base_text.split(";") if part.strip() and part.strip().lower() != "nan"]
@@ -204,7 +183,7 @@ def supplement_card_remarks(
             if not supplement:
                 continue
             existing = record.row.get("备注", "")
-            if supplement in existing:
+            if supplement in existing and "来源补充(" in existing:
                 break
             prefix = f"来源补充({wallet.source}): "
             record.row["备注"] = f"{existing}; {prefix}{supplement}" if existing else f"{prefix}{supplement}"
@@ -250,6 +229,46 @@ def reconcile(options: ReconcileOptions) -> ReconcileResult:
             grouped.setdefault(channel, []).append(record)
         for channel, records in grouped.items():
             write_intermediate_csv(options.intermediate_dir, channel, records)
+
+        # 汇总所有记录写入单一 Excel，方便一次性查看。
+        all_frames: Dict[str, List[dict]] = {sheet: [] for sheet in SHEET_COLUMNS}
+        debug_rows: List[dict] = []
+        for record in all_records:
+            if record.meta.supplement_only:
+                continue
+            all_frames[record.sheet].append(record.to_row())
+            debug_rows.append(
+                {
+                    "sheet": record.sheet.value if hasattr(record.sheet, "value") else str(record.sheet),
+                    "timestamp": record.timestamp.isoformat(),
+                    "amount": float(record.amount),
+                    "direction": record.direction,
+                    "account": record.account,
+                    "remark": record.remark,
+                    "source": record.source,
+                    "raw_id": record.raw_id or "",
+                    "canceled": record.canceled,
+                    "skipped_reason": record.skipped_reason or "",
+                    "meta.base_remark": record.meta.base_remark or "",
+                    "meta.merchant": record.meta.merchant or "",
+                    "meta.matching_key": record.meta.matching_key or "",
+                    "meta.channel": record.meta.channel or "",
+                    "meta.channel_label": record.meta.channel_label or "",
+                    "meta.supplement_only": record.meta.supplement_only,
+                    "meta.duplicate_with": record.meta.duplicate_with or "",
+                    "meta.supplemented_from": record.meta.supplemented_from or "",
+                    "meta.accepted": record.meta.accepted,
+                    "meta.source_extras": json.dumps(record.meta.source_extras, ensure_ascii=False),
+                    "row_json": json.dumps(record.row, ensure_ascii=False),
+                }
+            )
+        all_path = options.intermediate_dir / "all_records.xlsx"
+        with pd.ExcelWriter(all_path, engine="openpyxl") as writer:
+            for sheet, rows in all_frames.items():
+                df = pd.DataFrame(rows, columns=SHEET_COLUMNS[sheet])
+                df.to_excel(writer, sheet_name=sheet, index=False)
+            debug_df = pd.DataFrame(debug_rows)
+            debug_df.to_excel(writer, sheet_name="all_records_debug", index=False)
 
     actionable_records = [record for record in all_records if not record.skipped_reason and not record.canceled]
 
