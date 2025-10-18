@@ -5,12 +5,7 @@ from typing import List
 
 import pandas as pd
 
-from .base import (
-    annotate_source,
-    create_expense_record,
-    create_income_record,
-    ensure_column_order,
-)
+from .base import annotate_source, create_expense_record, create_income_record
 from ..models import StandardRecord
 from ..utils import normalize_text, to_decimal
 
@@ -65,5 +60,4 @@ def parse_citic(path: Path) -> List[StandardRecord]:
         annotate_source(record, {})
         records.append(record)
 
-    ensure_column_order(records)
     return records

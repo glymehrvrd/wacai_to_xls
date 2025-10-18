@@ -64,6 +64,7 @@ def build_increment_frames(records: Iterable[StandardRecord]) -> Dict[str, pd.Da
         if record.canceled or record.skipped_reason:
             continue
         # DataFrame 构建保持模板列顺序，方便直接写出。
-        row_df = pd.DataFrame([record.to_row()], columns=SHEET_COLUMNS[record.sheet])
-        result[record.sheet] = pd.concat([result[record.sheet], row_df], ignore_index=True)
+        sheet_name = record.sheet.value
+        row_df = pd.DataFrame([record.to_row()], columns=SHEET_COLUMNS[sheet_name])
+        result[sheet_name] = pd.concat([result[sheet_name], row_df], ignore_index=True)
     return result

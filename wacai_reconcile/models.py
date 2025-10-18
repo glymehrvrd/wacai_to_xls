@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -8,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from .schema import SHEET_COLUMNS, SHEET_NAMES
+from .schema import DEFAULT_VALUES, SHEET_COLUMNS, SHEET_NAMES
 
 
 class Sheet(StrEnum):
@@ -36,25 +37,155 @@ class RecordMeta:
 
 
 @dataclass
-class StandardRecord:
+class StandardRecord(ABC):
     """Single normalized transaction ready for reconciliation."""
 
-    sheet: Sheet  # 枚举化 Sheet，确保值限定在模板定义范围内
-    row: Dict[str, Any]  # 与 Excel 模板列名一致的一行数据
-    timestamp: datetime  # 交易发生时间，使用上海时区 tz-aware datetime
-    amount: Decimal  # 交易金额，已保留两位小数
-    direction: str  # 资金方向，通常为 "expense" 或 "income"
-    account: str  # 记账账户名称，例如 "微信"、"中信银行信用卡(1129)"
-    remark: str  # 标准化备注，常包含来源或原始渠道附加信息
-    source: str  # 原始渠道名称，例如 "微信支付"
-    raw_id: Optional[str] = None  # 渠道侧唯一标识，如交易单号/账单号
-    meta: RecordMeta = field(default_factory=RecordMeta)  # 额外上下文信息，以结构化字段维护
-    canceled: bool = False  # 是否被退款配对抵消，不再写入最终输出
-    skipped_reason: Optional[str] = None  # 若跳过导入，记录原因，例如 "non-wallet-payment"
+    sheet: Sheet
+    timestamp: datetime
+    amount: Decimal
+    direction: str
+    account: str
+    remark: str
+    source: str
+    raw_id: Optional[str] = None
+    meta: RecordMeta = field(default_factory=RecordMeta)
+    canceled: bool = False
+    skipped_reason: Optional[str] = None
 
     def to_row(self) -> Dict[str, Any]:
-        """Return a shallow copy so downstream修改不会影响缓存."""
-        return dict(self.row)
+        base = self._build_row()
+        defaults = DEFAULT_VALUES.get(self.sheet.value, {})
+        for column, value in defaults.items():
+            base.setdefault(column, value)
+        ordered: Dict[str, Any] = {}
+        for column in SHEET_COLUMNS[self.sheet.value]:
+            ordered[column] = base.get(column, "")
+        return ordered
+
+    @abstractmethod
+    def _build_row(self) -> Dict[str, Any]:
+        """Return a dictionary representing the row contents before defaults/ordering."""
+        raise NotImplementedError
+
+
+@dataclass
+class ExpenseRecord(StandardRecord):
+    category_main: str = "待分类"
+    category_sub: str = "待分类"
+    currency: str = "人民币"
+    project: str = "日常"
+    merchant: Optional[str] = None
+    reimburse: str = "非报销"
+    member_amount: str = ""
+    ledger: str = "日常账本"
+
+    def _build_row(self) -> Dict[str, Any]:
+        row: Dict[str, Any] = {
+            "支出大类": self.category_main,
+            "支出小类": self.category_sub,
+            "账户": self.account,
+            "消费日期": self.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "消费金额": f"{self.amount:.2f}",
+            "备注": self.remark,
+            "币种": self.currency,
+            "项目": self.project,
+            "报销": self.reimburse,
+            "成员金额": self.member_amount,
+            "账本": self.ledger,
+        }
+        if self.merchant:
+            row["商家"] = self.merchant
+        return row
+
+
+@dataclass
+class IncomeRecord(StandardRecord):
+    category: str = "待分类"
+    currency: str = "人民币"
+    project: str = "日常"
+    payer: Optional[str] = None
+    member_amount: str = ""
+    ledger: str = "日常账本"
+
+    def _build_row(self) -> Dict[str, Any]:
+        row: Dict[str, Any] = {
+            "收入大类": self.category,
+            "账户": self.account,
+            "收入日期": self.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "收入金额": f"{self.amount:.2f}",
+            "备注": self.remark,
+            "币种": self.currency,
+            "项目": self.project,
+            "成员金额": self.member_amount,
+            "账本": self.ledger,
+        }
+        if self.payer:
+            row["付款方"] = self.payer
+        return row
+
+
+@dataclass
+class TransferRecord(StandardRecord):
+    from_account: str = ""
+    to_account: str = ""
+    from_currency: str = "人民币"
+    to_currency: str = "人民币"
+    out_amount: Decimal = Decimal("0")
+    in_amount: Decimal = Decimal("0")
+    ledger: str = "日常账本"
+
+    def _build_row(self) -> Dict[str, Any]:
+        return {
+            "转出账户": self.from_account,
+            "币种": self.from_currency,
+            "转出金额": f"{self.out_amount:.2f}",
+            "转入账户": self.to_account,
+            "币种.1": self.to_currency,
+            "转入金额": f"{self.in_amount:.2f}",
+            "转账时间": self.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "备注": self.remark,
+            "账本": self.ledger,
+        }
+
+
+@dataclass
+class BorrowRecord(StandardRecord):
+    borrow_type: str = "借出"
+    loan_account: str = ""
+    counterparty_account: str = ""
+    ledger: str = "日常账本"
+
+    def _build_row(self) -> Dict[str, Any]:
+        return {
+            "借贷类型": self.borrow_type,
+            "借贷时间": self.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "借贷账户": self.loan_account,
+            "账户": self.counterparty_account,
+            "金额": f"{self.amount:.2f}",
+            "备注": self.remark,
+            "账本": self.ledger,
+        }
+
+
+@dataclass
+class RepayRecord(StandardRecord):
+    borrow_type: str = "借出"
+    loan_account: str = ""
+    counterparty_account: str = ""
+    interest: str = "0"
+    ledger: str = "日常账本"
+
+    def _build_row(self) -> Dict[str, Any]:
+        return {
+            "借贷类型": self.borrow_type,
+            "借贷时间": self.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "借贷账户": self.loan_account,
+            "账户": self.counterparty_account,
+            "金额": f"{self.amount:.2f}",
+            "利息": self.interest,
+            "备注": self.remark,
+            "账本": self.ledger,
+        }
 
 
 class SheetBundle:
@@ -75,7 +206,7 @@ class SheetBundle:
         for record in records:
             if record.canceled or record.skipped_reason:
                 continue  # 示例：skipped_reason="duplicate-baseline" 时不写入
-            by_sheet[record.sheet].append(record.to_row())
+            by_sheet[record.sheet.value].append(record.to_row())
         for sheet, rows in by_sheet.items():
             if not rows:
                 continue

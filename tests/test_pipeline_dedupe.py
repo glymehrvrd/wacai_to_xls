@@ -9,7 +9,12 @@ import pandas as pd
 from wacai_reconcile.baseline import BaselineIndex, build_account_locks
 from wacai_reconcile.pipeline import apply_account_locks, apply_baseline_dedupe, supplement_card_remarks
 from wacai_reconcile.refund import apply_refund_pairs
-from wacai_reconcile.models import Sheet, StandardRecord
+from wacai_reconcile.models import (
+    ExpenseRecord,
+    IncomeRecord,
+    Sheet,
+    StandardRecord,
+)
 
 
 def _make_record(
@@ -23,16 +28,28 @@ def _make_record(
     channel: str,
     extras: dict | None = None,
 ) -> StandardRecord:
-    record = StandardRecord(
-        sheet=sheet,
-        row={"备注": remark},
-        timestamp=timestamp,
-        amount=amount,
-        direction="income" if sheet == Sheet.INCOME else "expense",
-        account=account,
-        remark=remark,
-        source=source,
-    )
+    if sheet == Sheet.EXPENSE:
+        record: StandardRecord = ExpenseRecord(
+            sheet=sheet,
+            timestamp=timestamp,
+            amount=amount,
+            direction="expense",
+            account=account,
+            remark=remark,
+            source=source,
+        )
+    elif sheet == Sheet.INCOME:
+        record = IncomeRecord(
+            sheet=sheet,
+            timestamp=timestamp,
+            amount=amount,
+            direction="income",
+            account=account,
+            remark=remark,
+            source=source,
+        )
+    else:
+        raise ValueError(f"Unsupported sheet in test factory: {sheet}")
     record.meta.base_remark = remark
     record.meta.channel = channel
     if extras:
@@ -165,8 +182,8 @@ def test_supplement_card_remarks_matches_by_remark() -> None:
         date_tolerance=timedelta(hours=2),
     )
 
-    assert "来源补充(" in card_record.row["备注"]
-    assert "支付成功" in card_record.row["备注"]
+    assert "来源补充(" in card_record.remark
+    assert "支付成功" in card_record.remark
     assert card_record.meta.supplemented_from == "wechat"
 
 
@@ -194,5 +211,5 @@ def test_supplement_card_remarks_skips_when_pay_method_mismatch() -> None:
         date_tolerance=timedelta(hours=2),
     )
 
-    assert "来源补充" not in card_record.row.get("备注", "")
+    assert "来源补充" not in card_record.remark
     assert card_record.meta.supplemented_from is None

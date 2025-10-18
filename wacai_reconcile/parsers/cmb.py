@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 from bs4 import BeautifulSoup, Tag
 
-from .base import annotate_source, create_expense_record, create_income_record, ensure_column_order
+from .base import annotate_source, create_expense_record, create_income_record
 from ..models import StandardRecord
 from ..utils import normalize_text, to_decimal
 
@@ -164,5 +164,4 @@ def parse_cmb(path: Path) -> List[StandardRecord]:
         annotate_source(record, {"卡末四位": tail})
         records.append(record)
 
-    ensure_column_order(records)
     return records

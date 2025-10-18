@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
-from ..models import Sheet, StandardRecord
-from ..schema import DEFAULT_VALUES, SHEET_COLUMNS
+from ..models import ExpenseRecord, IncomeRecord, Sheet, StandardRecord
 from ..time_utils import as_datetime
 from ..utils import normalize_text, to_decimal
 
@@ -34,13 +32,6 @@ class ParseConfig:
     account_name: str
 
 
-def _apply_defaults(sheet: str, row: Dict[str, object]) -> Dict[str, object]:
-    defaults = DEFAULT_VALUES.get(sheet, {})
-    for column, value in defaults.items():
-        row.setdefault(column, value)
-    return row
-
-
 def create_expense_record(
     *,
     amount: object,
@@ -52,30 +43,21 @@ def create_expense_record(
     category_main: str = "待分类",
     category_sub: str = "待分类",
 ) -> Optional[StandardRecord]:
-    """Build支出记录，示例：amount=16.28 -> row['消费金额']="16.28"."""
     dt = as_datetime(timestamp)
     if dt is None:
         return None
     dec_amount = to_decimal(amount)
-    row: Dict[str, object] = {
-        "支出大类": category_main,
-        "支出小类": category_sub,
-        "账户": account,
-        "消费日期": dt.strftime("%Y-%m-%d %H:%M:%S"),
-        "消费金额": f"{dec_amount:.2f}",
-        "备注": remark,
-    }
-    if merchant:
-        row["商家"] = merchant
-    record = StandardRecord(
+    record = ExpenseRecord(
         sheet=Sheet.EXPENSE,
-        row=_apply_defaults("支出", row),
         timestamp=dt,
         amount=dec_amount,
         direction="expense",
         account=account,
         remark=remark,
         source=source,
+        category_main=category_main,
+        category_sub=category_sub,
+        merchant=merchant,
     )
     record.meta.base_remark = remark
     if merchant:
@@ -94,29 +76,20 @@ def create_income_record(
     payer: Optional[str] = None,
     category: str = "待分类",
 ) -> Optional[StandardRecord]:
-    """Build收入记录，示例：payer='公司报销' -> row['付款方']="公司报销"."""
     dt = as_datetime(timestamp)
     if dt is None:
         return None
     dec_amount = to_decimal(amount)
-    row: Dict[str, object] = {
-        "收入大类": category,
-        "账户": account,
-        "收入日期": dt.strftime("%Y-%m-%d %H:%M:%S"),
-        "收入金额": f"{dec_amount:.2f}",
-        "备注": remark,
-    }
-    if payer:
-        row["付款方"] = payer
-    record = StandardRecord(
+    record = IncomeRecord(
         sheet=Sheet.INCOME,
-        row=_apply_defaults("收入", row),
         timestamp=dt,
         amount=dec_amount,
         direction="income",
         account=account,
         remark=remark,
         source=source,
+        category=category,
+        payer=payer,
     )
     record.meta.base_remark = remark
     if payer:
@@ -131,23 +104,17 @@ def annotate_source(record: StandardRecord, extra: Dict[str, str] | None = None)
     if record.raw_id:
         parts.append(f"ID: {record.raw_id}")
     if extra:
-        for k, v in extra.items():
-            if not v:
+        for key, value in extra.items():
+            if not value:
                 continue
-            record.meta.source_extras[k] = v
-            parts.append(f"{k}: {v}")
-    remark = normalize_text(record.row.get("备注"))
-    if remark:
-        record.row["备注"] = f"{remark}; " + "; ".join(parts)
-    else:
-        record.row["备注"] = "; ".join(parts)
-    record.remark = normalize_text(record.row.get("备注"))
+            record.meta.source_extras[key] = value
+            parts.append(f"{key}: {value}")
+    suffix = "; ".join(parts)
+    remark = record.remark.strip()
+    record.remark = f"{remark}; {suffix}" if remark else suffix
 
 
 def ensure_column_order(records: Iterable[StandardRecord]) -> None:
-    for record in records:
-        columns = SHEET_COLUMNS[record.sheet]
-        # Insert missing columns as empty string to satisfy DataFrame construction later.
-        for column in columns:
-            record.row.setdefault(column, "")
-        record.row = {column: record.row.get(column, "") for column in columns}
+    """Backwards-compat shim for legacy callers; no-op now that to_row handles ordering."""
+    for _ in records:
+        continue

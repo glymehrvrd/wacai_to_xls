@@ -20,7 +20,6 @@ from .models import SheetBundle, StandardRecord
 from .parsers import parse_alipay, parse_citic, parse_cmb, parse_wechat
 from .refund import apply_refund_pairs
 from .schema import DEFAULT_AMOUNT_TOLERANCE, DEFAULT_DATE_TOLERANCE, DEFAULT_REFUND_WINDOW, SHEET_COLUMNS
-from .time_utils import as_datetime
 
 
 @dataclass
@@ -103,7 +102,7 @@ def write_intermediate_csv(intermediate_dir: Path, channel: str, records: Iterab
     for record in records:
         if record.meta.supplement_only:
             continue
-        by_sheet[record.sheet].append(record.to_row())
+        by_sheet[record.sheet.value].append(record.to_row())
     for sheet, rows in by_sheet.items():
         df = pd.DataFrame(rows, columns=SHEET_COLUMNS[sheet])
         csv_path = channel_dir / f"{sheet}.csv"
@@ -123,7 +122,7 @@ def apply_baseline_dedupe(records: Iterable[StandardRecord], baseline_index: Bas
     for record in records:
         if record.skipped_reason or record.canceled:
             continue
-        if baseline_index.exists(record.sheet, record.account, record.amount, record.timestamp, record.remark):
+        if baseline_index.exists(record.sheet.value, record.account, record.amount, record.timestamp, record.remark):
             record.skipped_reason = "duplicate-baseline"
 
 
@@ -135,7 +134,11 @@ def supplement_card_remarks(
     """Enrich card账单备注 with wallet来源备注，便于理解交易含义。"""
     wallet_channels = {"wechat", "alipay"}
     card_channels = {"citic", "cmb"}
-    wallet_records = [wallet for wallet in records if wallet.meta.channel in wallet_channels and not wallet.canceled]
+    wallet_records = [
+        wallet
+        for wallet in records
+        if wallet.meta.channel in wallet_channels and not wallet.canceled and not wallet.meta.supplement_only
+    ]
     wallet_by_remark: Dict[str, List[StandardRecord]] = {}
     for wallet in wallet_records:
         key = wallet.meta.base_remark or wallet.remark
@@ -182,12 +185,11 @@ def supplement_card_remarks(
             supplement = supplement_text or wallet.meta.base_remark or wallet.remark
             if not supplement:
                 continue
-            existing = record.row.get("备注", "")
+            existing = record.remark or ""
             if supplement in existing and "来源补充(" in existing:
                 break
             prefix = f"来源补充({wallet.source}): "
-            record.row["备注"] = f"{existing}; {prefix}{supplement}" if existing else f"{prefix}{supplement}"
-            record.remark = record.row["备注"]
+            record.remark = f"{existing}; {prefix}{supplement}" if existing else f"{prefix}{supplement}"
             record.meta.supplemented_from = wallet.meta.channel
             break
 
@@ -236,10 +238,10 @@ def reconcile(options: ReconcileOptions) -> ReconcileResult:
         for record in all_records:
             if record.meta.supplement_only:
                 continue
-            all_frames[record.sheet].append(record.to_row())
+            all_frames[record.sheet.value].append(record.to_row())
             debug_rows.append(
                 {
-                    "sheet": record.sheet.value if hasattr(record.sheet, "value") else str(record.sheet),
+                    "sheet": record.sheet.value,
                     "timestamp": record.timestamp.isoformat(),
                     "amount": float(record.amount),
                     "direction": record.direction,
@@ -259,7 +261,7 @@ def reconcile(options: ReconcileOptions) -> ReconcileResult:
                     "meta.supplemented_from": record.meta.supplemented_from or "",
                     "meta.accepted": record.meta.accepted,
                     "meta.source_extras": json.dumps(record.meta.source_extras, ensure_ascii=False),
-                    "row_json": json.dumps(record.row, ensure_ascii=False),
+                    "row_json": json.dumps(record.to_row(), ensure_ascii=False),
                 }
             )
         all_path = options.intermediate_dir / "all_records.xlsx"
@@ -347,7 +349,7 @@ def write_report(path: Path, records: Iterable[StandardRecord]) -> None:
         )
         rows.append(
             {
-                "sheet": record.sheet,
+                "sheet": record.sheet.value,
                 "account": record.account,
                 "timestamp": record.timestamp.isoformat(),
                 "amount": float(record.amount),
@@ -365,6 +367,6 @@ def write_report(path: Path, records: Iterable[StandardRecord]) -> None:
 
 def print_record_summary(record: StandardRecord) -> None:
     print("-" * 60)
-    print(f"{record.sheet} | {record.account} | {record.amount:.2f} | {record.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{record.sheet.value} | {record.account} | {record.amount:.2f} | {record.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"来源: {record.source} | 备注: {record.remark}")
     print("-" * 60)

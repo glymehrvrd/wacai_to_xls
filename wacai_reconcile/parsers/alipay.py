@@ -5,7 +5,7 @@ from typing import List
 
 import pandas as pd
 
-from .base import annotate_source, create_expense_record, create_income_record, ensure_column_order, is_wallet_funded
+from .base import annotate_source, create_expense_record, create_income_record, is_wallet_funded
 from ..models import StandardRecord
 from ..utils import normalize_text
 
@@ -88,5 +88,4 @@ def parse_alipay(path: Path) -> List[StandardRecord]:
             record.meta.supplement_only = True
         records.append(record)
 
-    ensure_column_order(records)
     return records
