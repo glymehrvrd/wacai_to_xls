@@ -30,7 +30,6 @@ def _make_record(
 ) -> StandardRecord:
     if sheet == Sheet.EXPENSE:
         record: StandardRecord = ExpenseRecord(
-            sheet=sheet,
             timestamp=timestamp,
             amount=amount,
             direction="expense",
@@ -40,7 +39,6 @@ def _make_record(
         )
     elif sheet == Sheet.INCOME:
         record = IncomeRecord(
-            sheet=sheet,
             timestamp=timestamp,
             amount=amount,
             direction="income",

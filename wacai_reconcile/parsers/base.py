@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Dict, Iterable, Optional, Tuple
 
-from ..models import ExpenseRecord, IncomeRecord, Sheet, StandardRecord
+from ..models import ExpenseRecord, IncomeRecord, Sheet, StandardRecord, TransferRecord
 from ..time_utils import as_datetime
 from ..utils import normalize_text, to_decimal
 
@@ -48,7 +48,6 @@ def create_expense_record(
         return None
     dec_amount = to_decimal(amount)
     record = ExpenseRecord(
-        sheet=Sheet.EXPENSE,
         timestamp=dt,
         amount=dec_amount,
         direction="expense",
@@ -81,7 +80,6 @@ def create_income_record(
         return None
     dec_amount = to_decimal(amount)
     record = IncomeRecord(
-        sheet=Sheet.INCOME,
         timestamp=dt,
         amount=dec_amount,
         direction="income",
@@ -95,6 +93,41 @@ def create_income_record(
     if payer:
         record.meta.merchant = normalize_text(payer)
     record.meta.matching_key = record.meta.matching_key or normalize_text(payer) or normalize_text(remark)
+    return record
+
+
+def create_transfer_record(
+    *,
+    amount: object,
+    timestamp: object,
+    account: str,
+    remark: str,
+    source: str,
+    from_account: str,
+    to_account: str,
+    from_currency: str = "人民币",
+    to_currency: str = "人民币",
+) -> Optional[StandardRecord]:
+    dt = as_datetime(timestamp)
+    if dt is None:
+        return None
+    dec_amount = to_decimal(amount)
+    record = TransferRecord(
+        timestamp=dt,
+        amount=dec_amount,
+        direction="transfer",
+        account=account,
+        remark=remark,
+        source=source,
+        from_account=from_account,
+        to_account=to_account,
+        from_currency=from_currency,
+        to_currency=to_currency,
+        out_amount=dec_amount,
+        in_amount=dec_amount,
+    )
+    record.meta.base_remark = remark
+    record.meta.matching_key = record.meta.matching_key or normalize_text(remark)
     return record
 
 

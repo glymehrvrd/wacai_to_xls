@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 import pandas as pd
 
@@ -40,7 +40,7 @@ class RecordMeta:
 class StandardRecord(ABC):
     """Single normalized transaction ready for reconciliation."""
 
-    sheet: Sheet
+    sheet_type: ClassVar[Sheet]
     timestamp: datetime
     amount: Decimal
     direction: str
@@ -51,6 +51,10 @@ class StandardRecord(ABC):
     meta: RecordMeta = field(default_factory=RecordMeta)
     canceled: bool = False
     skipped_reason: Optional[str] = None
+
+    @property
+    def sheet(self) -> Sheet:
+        return self.sheet_type
 
     def to_row(self) -> Dict[str, Any]:
         base = self._build_row()
@@ -70,6 +74,7 @@ class StandardRecord(ABC):
 
 @dataclass
 class ExpenseRecord(StandardRecord):
+    sheet_type: ClassVar[Sheet] = Sheet.EXPENSE
     category_main: str = "待分类"
     category_sub: str = "待分类"
     currency: str = "人民币"
@@ -100,6 +105,7 @@ class ExpenseRecord(StandardRecord):
 
 @dataclass
 class IncomeRecord(StandardRecord):
+    sheet_type: ClassVar[Sheet] = Sheet.INCOME
     category: str = "待分类"
     currency: str = "人民币"
     project: str = "日常"
@@ -126,6 +132,7 @@ class IncomeRecord(StandardRecord):
 
 @dataclass
 class TransferRecord(StandardRecord):
+    sheet_type: ClassVar[Sheet] = Sheet.TRANSFER
     from_account: str = ""
     to_account: str = ""
     from_currency: str = "人民币"
@@ -150,6 +157,7 @@ class TransferRecord(StandardRecord):
 
 @dataclass
 class BorrowRecord(StandardRecord):
+    sheet_type: ClassVar[Sheet] = Sheet.BORROW
     borrow_type: str = "借出"
     loan_account: str = ""
     counterparty_account: str = ""
@@ -169,6 +177,7 @@ class BorrowRecord(StandardRecord):
 
 @dataclass
 class RepayRecord(StandardRecord):
+    sheet_type: ClassVar[Sheet] = Sheet.REPAY
     borrow_type: str = "借出"
     loan_account: str = ""
     counterparty_account: str = ""

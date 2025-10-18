@@ -39,17 +39,35 @@ def test_wechat_parser_marks_wallet_vs_card(tmp_path: Path) -> None:
             "交易单号": "ID_CARD",
             "支付方式": "中信银行信用卡(1129)",
         },
+        {
+            "收/支": "/",
+            "金额(元)": 100.0,
+            "交易时间": "2025-10-11 14:00:00",
+            "备注": "/",
+            "当前状态": "支付成功",
+            "商品": "/",
+            "交易类型": "转入「日常消费」小金罐-来自零钱",
+            "交易对方": "/",
+            "交易单号": "ID_TRANSFER",
+            "支付方式": "零钱",
+        },
     ]
     _write_wechat_file(file_path, rows)
 
     records = parse_wechat(file_path)
-    assert len(records) == 2
+    assert len(records) == 3
 
     wallet_record = next(record for record in records if record.raw_id == "ID_WALLET")
     card_record = next(record for record in records if record.raw_id == "ID_CARD")
+    transfer_record = next(record for record in records if record.raw_id == "ID_TRANSFER")
 
     assert wallet_record.skipped_reason is None
     assert wallet_record.meta.source_extras.get("支付方式") == "零钱"
 
     assert card_record.skipped_reason == "non-wallet-payment"
     assert card_record.meta.supplement_only is True
+
+    assert transfer_record.sheet.value == "转账"
+    assert transfer_record.direction == "transfer"
+    assert transfer_record.meta.source_extras.get("支付方式") == "零钱"
+    assert transfer_record.meta.supplement_only is False
