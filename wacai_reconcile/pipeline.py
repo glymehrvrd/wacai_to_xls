@@ -100,8 +100,6 @@ def write_intermediate_csv(intermediate_dir: Path, channel: str, records: Iterab
     channel_dir.mkdir(parents=True, exist_ok=True)
     by_sheet: Dict[str, List[dict]] = {sheet: [] for sheet in SHEET_COLUMNS}
     for record in records:
-        if record.meta.supplement_only:
-            continue
         by_sheet[record.sheet.value].append(record.to_row())
     for sheet, rows in by_sheet.items():
         df = pd.DataFrame(rows, columns=SHEET_COLUMNS[sheet])
@@ -236,8 +234,6 @@ def reconcile(options: ReconcileOptions) -> ReconcileResult:
         all_frames: Dict[str, List[dict]] = {sheet: [] for sheet in SHEET_COLUMNS}
         debug_rows: List[dict] = []
         for record in all_records:
-            if record.meta.supplement_only:
-                continue
             all_frames[record.sheet.value].append(record.to_row())
             debug_rows.append(
                 {
