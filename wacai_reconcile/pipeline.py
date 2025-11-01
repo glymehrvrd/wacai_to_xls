@@ -95,11 +95,14 @@ def parse_channels(channel_paths: Dict[str, Path]) -> Dict[str, List[StandardRec
 
 def write_intermediate_csv(intermediate_dir: Path, channel: str, records: Iterable[StandardRecord]) -> None:
     # Persist中间CSV供调试或人工校验。
+    # 过滤掉 supplement_only 的记录，这些记录仅用于补充信息，不进入中间表。
     intermediate_dir.mkdir(parents=True, exist_ok=True)
     channel_dir = intermediate_dir / _sanitize_name(channel)
     channel_dir.mkdir(parents=True, exist_ok=True)
     by_sheet: Dict[str, List[dict]] = {sheet: [] for sheet in SHEET_COLUMNS}
     for record in records:
+        if record.meta.supplement_only:
+            continue
         by_sheet[record.sheet.value].append(record.to_row())
     for sheet, rows in by_sheet.items():
         df = pd.DataFrame(rows, columns=SHEET_COLUMNS[sheet])
@@ -132,11 +135,7 @@ def supplement_card_remarks(
     """Enrich card账单备注 with wallet来源备注，便于理解交易含义。"""
     wallet_channels = {"wechat", "alipay"}
     card_channels = {"citic", "cmb"}
-    wallet_records = [
-        wallet
-        for wallet in records
-        if wallet.meta.channel in wallet_channels and not wallet.canceled and not wallet.meta.supplement_only
-    ]
+    wallet_records = [wallet for wallet in records if wallet.meta.channel in wallet_channels and not wallet.canceled]
     wallet_by_remark: Dict[str, List[StandardRecord]] = {}
     for wallet in wallet_records:
         key = wallet.meta.base_remark or wallet.remark
@@ -163,7 +162,9 @@ def supplement_card_remarks(
                     continue
             status_text = wallet.meta.source_extras.get("状态", "")
             base_text = wallet.meta.base_remark or ""
-            base_parts = [part.strip() for part in base_text.split(";") if part.strip() and part.strip().lower() != "nan"]
+            base_parts = [
+                part.strip() for part in base_text.split(";") if part.strip() and part.strip().lower() != "nan"
+            ]
             supplement_candidates = base_parts.copy()
             if status_text:
                 supplement_candidates.append(f"状态: {status_text}")
@@ -186,7 +187,8 @@ def supplement_card_remarks(
             existing = record.remark or ""
             if supplement in existing and "来源补充(" in existing:
                 break
-            prefix = f"来源补充({wallet.source}): "
+            channel_label = wallet.meta.channel_label or "未知渠道"
+            prefix = f"来源补充({channel_label}): "
             record.remark = f"{existing}; {prefix}{supplement}" if existing else f"{prefix}{supplement}"
             record.meta.supplemented_from = wallet.meta.channel
             break
@@ -243,7 +245,6 @@ def reconcile(options: ReconcileOptions) -> ReconcileResult:
                     "direction": record.direction,
                     "account": record.account,
                     "remark": record.remark,
-                    "source": record.source,
                     "raw_id": record.raw_id or "",
                     "canceled": record.canceled,
                     "skipped_reason": record.skipped_reason or "",
@@ -349,8 +350,8 @@ def write_report(path: Path, records: Iterable[StandardRecord]) -> None:
                 "account": record.account,
                 "timestamp": record.timestamp.isoformat(),
                 "amount": float(record.amount),
-                "source": record.source,
                 "channel": record.meta.channel,
+                "channel_label": record.meta.channel_label or "",
                 "remark": record.remark,
                 "status": status,
                 "reason": record.skipped_reason or "",
@@ -363,6 +364,10 @@ def write_report(path: Path, records: Iterable[StandardRecord]) -> None:
 
 def print_record_summary(record: StandardRecord) -> None:
     print("-" * 60)
-    print(f"{record.sheet.value} | {record.account} | {record.amount:.2f} | {record.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"来源: {record.source} | 备注: {record.remark}")
+    print(
+        f"{record.sheet.value} | {record.account} | {record.amount:.2f} | "
+        f"{record.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    channel_label = record.meta.channel_label or "未知渠道"
+    print(f"来源: {channel_label} | 备注: {record.remark}")
     print("-" * 60)

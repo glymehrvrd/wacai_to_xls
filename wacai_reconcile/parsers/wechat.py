@@ -23,31 +23,29 @@ def parse_wechat(path: Path) -> List[StandardRecord]:
     records: List[StandardRecord] = []
     for _, row in df.iterrows():
         pay_flag = normalize_text(row.get("收/支"))
-        remark_raw = normalize_text(row.get("备注"))
-        remark_items = []
-        if remark_raw and remark_raw != "/":
-            remark_items.append(remark_raw)
         status = normalize_text(row.get("当前状态"))
-        if status:
-            remark_items.append(f"状态: {status}")
-        product = normalize_text(row.get("商品"))
-        if product:
-            remark_items.append(f"商品: {product}")
-        remark = "; ".join(remark_items)
+        # 备注只保留商品字段
+        product = row.get("商品")
+        if product is None or pd.isna(product):
+            remark = ""
+        else:
+            remark = normalize_text(str(product)) or ""
         merchant = normalize_text(row.get("交易对方"))
         trade_id = normalize_text(row.get("交易单号"))
         pay_method = normalize_text(row.get("支付方式"))
 
         wallet_payment = is_wallet_funded(pay_method, WALLET_KEYWORDS)  # 示例：支付方式"零钱"返回 True
 
+        # 使用 wallet_payment 判断是否是微信内部账户，统一映射为"微信"
+        account_name = "微信" if wallet_payment else (normalize_text(pay_method) or "微信")
+
         if pay_flag == "支出":
             record = create_expense_record(
                 amount=row.get("金额(元)"),
                 timestamp=row.get("交易时间"),
-                account="微信",
+                account=account_name,
                 remark=remark,
                 merchant=merchant,
-                source="微信支付",
             )
         elif pay_flag == "收入":
             record = create_income_record(
@@ -56,27 +54,30 @@ def parse_wechat(path: Path) -> List[StandardRecord]:
                 account="微信",
                 remark=remark,
                 payer=merchant,
-                source="微信支付",
                 category="待分类",
             )
         elif pay_flag == "/":
             transaction_type = normalize_text(row.get("交易类型"))
-            from_account = normalize_text(row.get("支付方式")) or "微信"
+            from_account = account_name or "微信"
             to_account = ""
             if "-来自" in transaction_type:
                 to_part, from_part = transaction_type.split("-来自", 1)
-                to_account = to_part.replace("转入", "").replace("「", "").replace("」", "").strip() or "微信"
-            elif "-到" in transaction_type:
-                to_part, from_part = transaction_type.split("-到", 1)
-                from_account = to_part.replace("转出", "").replace("「", "").replace("」", "").strip() or "微信"
-                to_account = from_part.replace("「", "").replace("」", "").strip() or "零钱"
-            account_name = to_account or from_account or "微信"
+                to_account_raw = to_part.replace("转入", "").replace("「", "").replace("」", "").strip() or "微信"
+                from_account_raw = from_part.replace("「", "").replace("」", "").strip() or from_account or "零钱"
+                # 使用 is_wallet_funded 判断是否是微信内部账户
+                to_account = "微信" if is_wallet_funded(to_account_raw, WALLET_KEYWORDS) else (to_account_raw or "微信")
+                from_account = (
+                    "微信" if is_wallet_funded(from_account_raw, WALLET_KEYWORDS) else (from_account_raw or "微信")
+                )
+            elif "零钱充值" == transaction_type:
+                to_account = "微信"
+            if from_account == to_account:
+                continue
             record = create_transfer_record(
                 amount=row.get("金额(元)"),
                 timestamp=row.get("交易时间"),
-                account=account_name,
+                account=from_account or to_account or "微信",
                 remark=remark,
-                source="微信支付",
                 from_account=from_account or "",
                 to_account=to_account or "",
             )

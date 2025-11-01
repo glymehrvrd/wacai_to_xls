@@ -40,17 +40,23 @@ def parse_alipay(path: Path) -> List[StandardRecord]:
     for _, row in df.iterrows():
         direction = normalize_text(row.get("收/支"))
         status = normalize_text(row.get("交易状态"))
-        if direction not in {"支出", "收入"}:
+        if direction not in {"支出", "收入", "不计收支"}:
             continue
-        remark_items = []
-        product = normalize_text(row.get("商品说明"))
-        if product:
-            remark_items.append(product)
-        note_raw = row.get("备注")
-        note = "" if pd.isna(note_raw) else normalize_text(note_raw)
-        if note:
-            remark_items.append(note)
-        remark = "; ".join(remark_items)
+
+        # 金额为0的交易不记录
+        amount = row.get("金额")
+        try:
+            amount_float = float(amount) if amount is not None and not pd.isna(amount) else 0.0
+            if amount_float == 0.0:
+                continue
+        except (ValueError, TypeError):
+            continue
+        # 备注只保留第一个字段（商品说明）
+        product = row.get("商品说明")
+        if product is None or pd.isna(product):
+            remark = ""
+        else:
+            remark = normalize_text(str(product)) or ""
         merchant = normalize_text(row.get("交易对方"))
         payment = normalize_text(row.get("收/付款方式"))
         order_no = normalize_text(row.get("交易订单号"))
@@ -58,24 +64,43 @@ def parse_alipay(path: Path) -> List[StandardRecord]:
 
         wallet_payment = is_wallet_funded(payment, WALLET_KEYWORDS)  # 示例：payment="花呗" -> True
 
+        # 账户名称处理：花呗单独记为"花呗"，其他支付宝内部账户记为"支付宝"
+        payment_normalized = normalize_text(payment) or ""
+        if "花呗" in payment_normalized:
+            account_name = "花呗"
+        elif is_wallet_funded(payment, WALLET_KEYWORDS):
+            account_name = "支付宝"
+        else:
+            account_name = payment_normalized or "支付宝"
+
         if direction == "支出":
             record = create_expense_record(
                 amount=row.get("金额"),
                 timestamp=row.get("交易时间"),
-                account="支付宝",
+                account=account_name,
                 remark=remark,
                 merchant=merchant,
-                source="支付宝",
             )
-        else:
+        elif direction == "收入":
             record = create_income_record(
                 amount=row.get("金额"),
                 timestamp=row.get("交易时间"),
-                account="支付宝",
+                account=account_name,
                 remark=remark,
                 payer=merchant,
-                source="支付宝",
                 category="待分类",
+            )
+        else:  # 不计收支
+            is_refund = direction == "不计收支" and (normalize_text(row.get("交易分类")) == "退款" or "退款" in status)
+            if not is_refund:
+                continue
+            record = create_income_record(
+                amount=row.get("金额"),
+                timestamp=row.get("交易时间"),
+                account=account_name,
+                remark=remark,
+                payer=merchant,
+                category="退款返款",
             )
         if record is None:
             continue

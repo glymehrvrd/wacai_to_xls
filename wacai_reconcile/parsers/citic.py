@@ -37,7 +37,6 @@ def parse_citic(path: Path) -> List[StandardRecord]:
                 account=account_name,
                 remark="退款/还款",
                 payer=description,
-                source="中信银行信用卡",
                 category="退款返款",
             )
             if record:
@@ -49,7 +48,6 @@ def parse_citic(path: Path) -> List[StandardRecord]:
                 account=account_name,
                 remark=remark,
                 merchant=description,
-                source="中信银行信用卡",
             )
             if record:
                 record.meta.merchant = merchant_name

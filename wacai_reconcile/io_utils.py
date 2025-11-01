@@ -61,8 +61,8 @@ def build_increment_frames(records: Iterable[StandardRecord]) -> Dict[str, pd.Da
     for sheet in SHEET_NAMES:
         result[sheet] = pd.DataFrame(columns=SHEET_COLUMNS[sheet])  # 初始化各 sheet 空 DataFrame
     for record in records:
-        if record.canceled or record.skipped_reason:
-            continue
+        if record.canceled or record.skipped_reason or record.meta.supplement_only:
+            continue  # 跳过已取消、已跳过或仅用于补充的记录
         # DataFrame 构建保持模板列顺序，方便直接写出。
         sheet_name = record.sheet.value
         row_df = pd.DataFrame([record.to_row()], columns=SHEET_COLUMNS[sheet_name])

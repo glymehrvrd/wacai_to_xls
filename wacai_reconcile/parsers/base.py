@@ -38,7 +38,6 @@ def create_expense_record(
     timestamp: object,
     account: str,
     remark: str,
-    source: str,
     merchant: Optional[str] = None,
     category_main: str = "待分类",
     category_sub: str = "待分类",
@@ -53,7 +52,6 @@ def create_expense_record(
         direction="expense",
         account=account,
         remark=remark,
-        source=source,
         category_main=category_main,
         category_sub=category_sub,
         merchant=merchant,
@@ -71,7 +69,6 @@ def create_income_record(
     timestamp: object,
     account: str,
     remark: str,
-    source: str,
     payer: Optional[str] = None,
     category: str = "待分类",
 ) -> Optional[StandardRecord]:
@@ -85,7 +82,6 @@ def create_income_record(
         direction="income",
         account=account,
         remark=remark,
-        source=source,
         category=category,
         payer=payer,
     )
@@ -102,7 +98,6 @@ def create_transfer_record(
     timestamp: object,
     account: str,
     remark: str,
-    source: str,
     from_account: str,
     to_account: str,
     from_currency: str = "人民币",
@@ -118,7 +113,6 @@ def create_transfer_record(
         direction="transfer",
         account=account,
         remark=remark,
-        source=source,
         from_account=from_account,
         to_account=to_account,
         from_currency=from_currency,
@@ -132,19 +126,12 @@ def create_transfer_record(
 
 
 def annotate_source(record: StandardRecord, extra: Dict[str, str] | None = None) -> None:
-    """Append来源信息到备注，示例：extra={'支付方式': '中信银行信用卡(1129)'}."""
-    parts = [f"来源: {record.source}"]
-    if record.raw_id:
-        parts.append(f"ID: {record.raw_id}")
+    """将额外信息保存到 source_extras，不添加到备注中，示例：extra={'支付方式': '中信银行信用卡(1129)'}."""
     if extra:
         for key, value in extra.items():
             if not value:
                 continue
             record.meta.source_extras[key] = value
-            parts.append(f"{key}: {value}")
-    suffix = "; ".join(parts)
-    remark = record.remark.strip()
-    record.remark = f"{remark}; {suffix}" if remark else suffix
 
 
 def ensure_column_order(records: Iterable[StandardRecord]) -> None:

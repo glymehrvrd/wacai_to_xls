@@ -46,7 +46,6 @@ class StandardRecord(ABC):
     direction: str
     account: str
     remark: str
-    source: str
     raw_id: Optional[str] = None
     meta: RecordMeta = field(default_factory=RecordMeta)
     canceled: bool = False
@@ -213,8 +212,8 @@ class SheetBundle:
     def update_from_records(self, records: List[StandardRecord]) -> None:
         by_sheet: Dict[str, List[Dict[str, Any]]] = {sheet: [] for sheet in SHEET_NAMES}
         for record in records:
-            if record.canceled or record.skipped_reason:
-                continue  # 示例：skipped_reason="duplicate-baseline" 时不写入
+            if record.canceled or record.skipped_reason or record.meta.supplement_only:
+                continue  # 跳过已取消、已跳过或仅用于补充的记录
             by_sheet[record.sheet.value].append(record.to_row())
         for sheet, rows in by_sheet.items():
             if not rows:

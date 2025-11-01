@@ -128,7 +128,6 @@ def parse_cmb(path: Path) -> List[StandardRecord]:
                 account=account,
                 remark="退款/还款",
                 payer=description,
-                source="招商银行信用卡",
                 category="退款返款",
             )
             if record is None:
@@ -155,7 +154,6 @@ def parse_cmb(path: Path) -> List[StandardRecord]:
             account=account,
             remark=remark,
             merchant=description,
-            source="招商银行信用卡",
         )
         if record is None:
             continue
