@@ -135,6 +135,33 @@ def test_apply_account_locks_marks_records() -> None:
     assert record_after.skipped_reason is None
 
 
+def test_apply_account_locks_normalizes_account_name() -> None:
+    """测试账户锁定时会去掉账户名的尾号（括号及其内容）。
+
+    例如："招商银行信用卡(1129)" 应该匹配 "招商银行信用卡" 的锁定。
+    """
+    dt_lock = datetime(2025, 10, 1, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    # locks 中存储的是标准化后的账户名（不带尾号）
+    locks = {"招商银行信用卡": dt_lock}
+
+    # 记录中的账户名带有尾号
+    record_before = _make_record(
+        timestamp=datetime(2025, 9, 30, 23, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        account="招商银行信用卡(1129)",
+        channel="cmb",
+    )
+    record_after = _make_record(
+        timestamp=datetime(2025, 10, 2, 8, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        account="招商银行信用卡(1129)",
+        channel="cmb",
+    )
+
+    apply_account_locks([record_before, record_after], locks)
+
+    assert record_before.skipped_reason == "account-locked"
+    assert record_after.skipped_reason is None
+
+
 def test_apply_baseline_dedupe_detects_duplicates() -> None:
     baseline_frame = pd.DataFrame(
         [

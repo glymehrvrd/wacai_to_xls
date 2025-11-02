@@ -17,6 +17,22 @@ from .time_utils import as_datetime
 from .utils import normalize_text, to_decimal
 
 
+def normalize_account_name(account: str) -> str:
+    """标准化账户名称，去掉尾号（括号及其内容）。
+
+    示例：
+    - "招商银行信用卡(1129)" -> "招商银行信用卡"
+    - "中信银行信用卡(5678)" -> "中信银行信用卡"
+    """
+    if not account:
+        return account
+    # 查找第一个左括号的位置
+    paren_pos = account.find("(")
+    if paren_pos > 0:
+        return account[:paren_pos]
+    return account
+
+
 def build_account_locks(frames: Dict[str, pd.DataFrame]) -> Dict[str, datetime]:
     """Capture the latest adjustment timestamp per account to freeze older entries."""
     locks: Dict[str, datetime] = {}
@@ -43,6 +59,8 @@ def build_account_locks(frames: Dict[str, pd.DataFrame]) -> Dict[str, datetime]:
             account = normalize_text(row.get("账户"))
             if not account:
                 continue
+            # 标准化账户名称，去掉尾号
+            account = normalize_account_name(account)
             current = locks.get(account)
             # 同一账户保留最近的锁定时间，确保不倒退。
             if current is None or dt > current:

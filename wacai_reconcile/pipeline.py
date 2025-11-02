@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Optional
 import pandas as pd
 import json
 
-from .baseline import BaselineIndex, build_account_locks
+from .baseline import BaselineIndex, build_account_locks, normalize_account_name
 from .io_utils import (
     build_increment_frames,
     load_wacai_workbook,
@@ -114,7 +114,9 @@ def apply_account_locks(records: Iterable[StandardRecord], locks: Dict[str, date
     for record in records:
         if record.skipped_reason or record.canceled:
             continue
-        lock = locks.get(record.account)
+        # 标准化账户名称，去掉尾号（括号及其内容）
+        normalized_account = normalize_account_name(record.account)
+        lock = locks.get(normalized_account)
         if lock and record.timestamp <= lock:
             record.skipped_reason = "account-locked"
 
