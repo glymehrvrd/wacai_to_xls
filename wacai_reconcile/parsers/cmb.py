@@ -9,8 +9,10 @@ from typing import List, Optional, Tuple
 
 from bs4 import BeautifulSoup, Tag
 
+from decimal import Decimal
+
 from .base import annotate_source, create_expense_record, create_income_record
-from ..models import StandardRecord
+from ..models import ExpenseRecord, IncomeRecord, StandardRecord
 from ..utils import normalize_text, to_decimal
 
 
@@ -83,6 +85,121 @@ def _resolve_date(value: str, cycle: Optional[Tuple[int, int, int, int]]) -> Opt
     return None
 
 
+def _merge_cmb_silver_rebate_records(records: List[StandardRecord]) -> List[StandardRecord]:
+    """合并所有"银联Pay境内返现"和"银联Pay境内返现调回"的记录，只输出一条记录。
+
+    合并策略：
+    - 将所有"银联Pay境内返现"和"银联Pay境内返现调回"的记录合并成一条
+    - 金额为所有相关记录的代数和（返现相加，调回相减）
+    - 如果合并后金额为0，则取消所有相关记录
+    - 如果合并后金额为正数，创建一个支出记录
+    - 如果合并后金额为负数，创建一个收入记录（金额取绝对值）
+    - 新记录使用时间戳最早的记录的时间戳和账户
+    """
+    # 查找需要合并的记录
+    rebate_records: List[StandardRecord] = []
+    adjust_records: List[StandardRecord] = []
+
+    for record in records:
+        # 获取描述信息：支出记录使用merchant，收入记录使用payer
+        if isinstance(record, ExpenseRecord):
+            description = record.merchant or ""
+        elif isinstance(record, IncomeRecord):
+            description = record.payer or ""
+        else:
+            description = ""
+
+        # 实际描述可能是 "银联Pay境内返现-xxx" 或 "银联Pay境内返现调回-xxx" 格式
+        if description.startswith("银联Pay境内返现") and not description.startswith("银联Pay境内返现调回"):
+            rebate_records.append(record)
+        elif description.startswith("银联Pay境内返现调回"):
+            adjust_records.append(record)
+
+    # 如果没有相关记录，不需要合并
+    if not rebate_records and not adjust_records:
+        return records
+
+    # 合并所有相关记录：计算总金额
+    total_rebate = Decimal("0")
+    total_adjust = Decimal("0")
+    all_records = rebate_records + adjust_records
+    earliest_timestamp = None
+    first_account = None
+
+    # 计算返现总额
+    for rebate in rebate_records:
+        total_rebate += rebate.amount
+        if earliest_timestamp is None or rebate.timestamp < earliest_timestamp:
+            earliest_timestamp = rebate.timestamp
+            first_account = rebate.account
+
+    # 计算调回总额（调回记录如果是收入记录，说明原始金额是负数）
+    for adjust in adjust_records:
+        if adjust.direction == "income":
+            # 调回是收入记录，说明原始金额是负数，合并时减去
+            total_adjust += adjust.amount
+        else:
+            # 如果调回也是支出记录，直接用加法（但这种情况不应该出现）
+            total_adjust += adjust.amount
+        if earliest_timestamp is None or adjust.timestamp < earliest_timestamp:
+            earliest_timestamp = adjust.timestamp
+            first_account = adjust.account
+
+    # 计算合并后的金额
+    merged_amount = total_rebate - total_adjust
+
+    # 取消所有原始记录
+    for record in all_records:
+        record.canceled = True
+        record.skipped_reason = "merged-with-rebate"
+
+    # 如果合并后金额为0，不创建新记录
+    if abs(merged_amount) < Decimal("0.01"):
+        result: List[StandardRecord] = []
+        for record in records:
+            if record.skipped_reason != "merged-with-rebate":
+                result.append(record)
+        return result
+
+    # 根据合并后的金额创建新记录
+    if earliest_timestamp is None or first_account is None:
+        # 如果没有找到时间戳或账户，不应该发生，但为了安全起见返回原记录
+        return records
+
+    if merged_amount > 0:
+        # 正数创建支出记录
+        merged_record = create_expense_record(
+            amount=merged_amount,
+            timestamp=earliest_timestamp,
+            account=first_account,
+            remark="",
+            merchant="银联Pay境内返现",
+        )
+    else:
+        # 负数创建收入记录（金额取绝对值）
+        merged_record = create_income_record(
+            amount=abs(merged_amount),
+            timestamp=earliest_timestamp,
+            account=first_account,
+            remark="",
+            payer="银联Pay境内返现调回",
+            category="退款返款",
+        )
+
+    if merged_record is None:
+        # 如果创建失败，返回原记录
+        return records
+
+    # 构建结果列表：包含新创建的记录和其他未合并的记录
+    result: List[StandardRecord] = []
+    for record in records:
+        if record.skipped_reason != "merged-with-rebate":
+            result.append(record)
+    result.append(merged_record)
+
+    return result
+
+
 def parse_cmb(path: Path) -> List[StandardRecord]:
     if not path.exists():
         raise FileNotFoundError(f"CMB statement not found: {path}")
@@ -114,19 +231,24 @@ def parse_cmb(path: Path) -> List[StandardRecord]:
     records: List[StandardRecord] = []
     for tx in transactions:
         description = normalize_text(tx.get("交易摘要"))
-        merchant_name = description.split("－", 1)[-1] if "－" in description else description.split("-", 1)[-1] if "-" in description else description
+        merchant_name = (
+            description.split("－", 1)[-1]
+            if "－" in description
+            else description.split("-", 1)[-1] if "-" in description else description
+        )
         merchant_name = normalize_text(merchant_name)
         tail = normalize_text(tx.get("卡号末四位"))
         account = f"招商银行信用卡({tail})" if tail else "招商银行信用卡"
         amount = to_decimal(tx.get("人民币金额"))
         timestamp = _resolve_date(tx.get("交易日") or tx.get("记账日"), cycle)
+        remark = ""
         if amount <= 0:
             # 招行账单里负值代表退款/还款，转成收入侧方便后续抵消。
             record = create_income_record(
                 amount=abs(amount),
                 timestamp=timestamp,
                 account=account,
-                remark="退款/还款",
+                remark=remark,
                 payer=description,
                 category="退款返款",
             )
@@ -137,17 +259,6 @@ def parse_cmb(path: Path) -> List[StandardRecord]:
             annotate_source(record, {"卡末四位": tail})
             records.append(record)
             continue
-        remark_parts = []
-        posting = _resolve_date(tx.get("记账日"), cycle)
-        if posting:
-            remark_parts.append(f"记账: {posting}")
-        location = normalize_text(tx.get("交易地"))
-        if location:
-            remark_parts.append(f"地点: {location}")
-        foreign = normalize_text(tx.get("交易地金额"))
-        if foreign:
-            remark_parts.append(f"原币金额: {foreign}")
-        remark = "; ".join(remark_parts)
         record = create_expense_record(
             amount=amount,
             timestamp=timestamp,
@@ -158,8 +269,10 @@ def parse_cmb(path: Path) -> List[StandardRecord]:
         if record is None:
             continue
         record.meta.merchant = merchant_name
+        foreign = normalize_text(tx.get("交易地金额"))
         record.raw_id = f"{tx.get('交易日')}_{description}_{foreign}"
         annotate_source(record, {"卡末四位": tail})
         records.append(record)
 
-    return records
+    # 合并"银联Pay境内返现"和"银联Pay境内返现调回"的记录
+    return _merge_cmb_silver_rebate_records(records)

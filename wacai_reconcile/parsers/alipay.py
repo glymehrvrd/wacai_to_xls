@@ -65,7 +65,7 @@ def parse_alipay(path: Path) -> List[StandardRecord]:
         wallet_payment = is_wallet_funded(payment, WALLET_KEYWORDS)  # 示例：payment="花呗" -> True
 
         # 账户名称处理：花呗单独记为"花呗"，其他支付宝内部账户记为"支付宝"
-        payment_normalized = normalize_text(payment) or ""
+        payment_normalized = payment or ""
         if "花呗" in payment_normalized:
             account_name = "花呗"
         elif is_wallet_funded(payment, WALLET_KEYWORDS):
@@ -107,7 +107,7 @@ def parse_alipay(path: Path) -> List[StandardRecord]:
         record.raw_id = order_no or merchant_order
         annotate_source(record, {"支付方式": payment, "状态": status})
         if merchant:
-            record.meta.matching_key = normalize_text(merchant)
+            record.meta.matching_key = merchant
         if not wallet_payment:
             record.skipped_reason = "non-wallet-payment"
             record.meta.supplement_only = True

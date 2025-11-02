@@ -10,7 +10,7 @@ import pandas as pd
 from .schema import (
     AMOUNT_COLUMNS,
     DATE_COLUMNS,
-    LOCK_REMARK,
+    LOCK_REMARKS,
     SHEET_NAMES,
 )
 from .time_utils import as_datetime
@@ -36,7 +36,7 @@ def build_account_locks(frames: Dict[str, pd.DataFrame]) -> Dict[str, datetime]:
             remark = normalize_text(row.get("备注"))
             lock_trigger = False
             # 满足备注的锁定条件即冻结账户历史交易。
-            if remark == LOCK_REMARK:
+            if remark in LOCK_REMARKS:
                 lock_trigger = True
             if not lock_trigger:
                 continue
@@ -88,7 +88,7 @@ class BaselineIndex:
                 values.sort(key=lambda item: item[0])
 
     def exists(self, sheet: str, account: str, amount: Decimal, timestamp: datetime, remark: str = "") -> bool:
-        account_key = normalize_text(account) or "__UNKNOWN__"
+        account_key = account or "__UNKNOWN__"
         candidates = self.entries.get(sheet, {}).get(account_key, [])
         if not candidates:
             return False
@@ -98,7 +98,7 @@ class BaselineIndex:
                 continue
             if abs(base_amount - amount) > self.amount_tolerance:
                 continue
-            if remark and base_remark and normalize_text(remark) != base_remark:
+            if remark and base_remark and remark != base_remark:
                 continue
             return True
         return False

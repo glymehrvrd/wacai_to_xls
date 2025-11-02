@@ -1,10 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Fri Mar  8 19:32:52 2019
-
-@author: jasonjsyuan
-"""
-
 import pandas as pd
 import sqlite3
 from datetime import datetime
@@ -48,7 +42,7 @@ outgosubtype = {}
 outgosubtomain = {}
 for _, row in df.iterrows():
     outgosubtype[row["uuid"]] = row["name"]
-    outgosubtomain[row["uuid"]] = row["parentUuid"]
+    outgosubtomain[row["uuid"]] = row["parentUuid"] or row["uuid"]
 
 df = pd.read_sql_query("select uuid,name from TBL_INCOMEMAINTYPEINFO", conn)
 incomemaintype = {}
@@ -81,7 +75,6 @@ for _, row in df.iterrows():
         book = books[row["bookUuid"]]
         account, fee_type = parse_account(row["accountUuid"], accounts)
         dd = datetime.fromtimestamp(row["date"]).strftime("%Y-%m-%d %H:%M:%S")
-        # print(book,account)
 
         tradetype = row["tradetype"]
         if tradetype == 1:
@@ -90,18 +83,17 @@ for _, row in df.iterrows():
             subtyp = outgosubtype[row["typeUuid"]]
             dd_outgo.append(
                 (
+                    dd,
                     maintyp,
                     subtyp,
-                    account,
+                    "%.2f" % (float(row["money"]) / 100),
                     fee_type,
+                    account,
                     "日常",
                     "",
                     "非报销",
-                    dd,
-                    "%.2f" % (float(row["money"]) / 100),
                     "",
                     row["comment"] or "",
-                    book,
                 )
             )
         elif tradetype == 2:
@@ -109,16 +101,16 @@ for _, row in df.iterrows():
             typ = incomemaintype[row["typeUuid"]]
             dd_income.append(
                 (
+                    dd,
                     typ,
-                    account,
+                    "%.2f" % (float(row["money"]) / 100),
                     fee_type,
+                    account,
                     "日常",
                     "",
-                    dd,
-                    "%.2f" % (float(row["money"]) / 100),
                     "",
                     row["comment"] or "",
-                    book,
+                    "非报销",
                 )
             )
         elif tradetype == 3:
@@ -126,15 +118,16 @@ for _, row in df.iterrows():
             account2, fee_type2 = parse_account(row["accountUuid2"], accounts)
             dd_transfer.append(
                 (
-                    account,
-                    fee_type,
-                    "%.2f" % (float(row["money"]) / 100),
-                    account2,
-                    fee_type2,
-                    "%.2f" % (float(row["money2"]) / 100),
                     dd,
+                    "",
+                    account,
+                    "%.2f" % (float(row["money"]) / 100),
+                    fee_type,
+                    account2,
+                    "%.2f" % (float(row["money2"]) / 100),
+                    fee_type2,
                     row["comment"] or "",
-                    book,
+                    "日常",
                 )
             )
         elif tradetype == 4:
@@ -143,13 +136,31 @@ for _, row in df.iterrows():
                 # borrow in
                 account2, fee_type2 = parse_account(row["accountUuid2"], accounts)
                 dd_borrow.append(
-                    ("借入", dd, account2, account, "%.2f" % (float(row["money"]) / 100), row["comment"] or "", book)
+                    (
+                        dd,
+                        "借入",
+                        "%.2f" % (float(row["money"]) / 100),
+                        fee_type,
+                        account2,
+                        account,
+                        row["comment"] or "",
+                        "日常",
+                    )
                 )
             else:
                 # borrow out
                 account2, fee_type2 = parse_account(row["accountUuid2"], accounts)
                 dd_borrow.append(
-                    ("借出", dd, account2, account, "%.2f" % (float(row["money"]) / 100), row["comment"] or "", book)
+                    (
+                        dd,
+                        "借出",
+                        "%.2f" % (float(row["money"]) / 100),
+                        fee_type,
+                        account2,
+                        account,
+                        row["comment"] or "",
+                        "日常",
+                    )
                 )
         elif tradetype == 5:
             # refund
@@ -158,14 +169,15 @@ for _, row in df.iterrows():
                 account2, fee_type2 = parse_account(row["accountUuid2"], accounts)
                 dd_refund.append(
                     (
-                        "收款",
                         dd,
+                        "收款",
                         account2,
                         account,
                         "%.2f" % (float(row["money"]) / 100),
                         "%.2f" % (float(row["money2"]) / 100),
+                        fee_type,
                         row["comment"] or "",
-                        book,
+                        "日常",
                     )
                 )
             else:
@@ -173,61 +185,61 @@ for _, row in df.iterrows():
                 account2, fee_type2 = parse_account(row["accountUuid2"], accounts)
                 dd_refund.append(
                     (
-                        "还款",
                         dd,
+                        "还款",
                         account2,
                         account,
                         "%.2f" % (float(row["money"]) / 100),
                         "%.2f" % (float(row["money2"]) / 100),
+                        fee_type,
                         row["comment"] or "",
-                        book,
+                        "日常",
                     )
                 )
         else:
-            print(row)
-            typ = incomemaintype[row["typeUuid"]]
-            print(typ)
+            raise Exception("Unknown tradetype: %s" % tradetype)
     except Exception as e:
-        print("exception", e)
-        print(row)
-        continue
+        raise e
 
 
 df_outgo = pd.DataFrame(
     dd_outgo,
     columns=[
+        "消费日期",
         "支出大类",
         "支出小类",
-        "账户",
+        "消费金额",
         "币种",
-        "项目",
+        "账户",
+        "标签",
         "商家",
         "报销",
-        "消费日期",
-        "消费金额",
         "成员金额",
         "备注",
-        "账本",
     ],
 )
 df_income = pd.DataFrame(
     dd_income,
-    columns=["收入大类", "账户", "币种", "项目", "付款方", "收入日期", "收入金额", "成员金额", "备注", "账本"],
+    columns=["收入日期", "收入大类", "收入金额", "币种", "账户", "标签", "付款方", "成员金额", "备注", "报销"],
 )
 df_transfer = pd.DataFrame(
-    dd_transfer, columns=["转出账户", "币种", "转出金额", "转入账户", "币种", "转入金额", "转账时间", "备注", "账本"]
+    dd_transfer,
+    columns=["转账时间", "转账类别", "转出账户", "转出金额", "币种", "转入账户", "转入金额", "币种", "备注", "标签"],
 )
-df_borrow = pd.DataFrame(dd_borrow, columns=["借贷类型", "借贷时间", "借贷账户", "账户", "金额", "备注", "账本"])
+df_borrow = pd.DataFrame(
+    dd_borrow, columns=["借贷时间", "借贷类型", "金额", "币种", "借贷账户", "账户", "备注", "标签"]
+)
 df_refund = pd.DataFrame(
-    dd_refund, columns=["借贷类型", "借贷时间", "借贷账户", "账户", "金额", "利息", "备注", "账本"]
+    dd_refund, columns=["借贷时间", "借贷类型", "借贷账户", "账户", "金额", "利息", "币种", "备注", "标签"]
 )
 
-writer = pd.ExcelWriter("wacai.xlsx")
+# 输出到输入文件所在目录
+input_path = sys.argv[1]
+output_path = os.path.join(os.path.dirname(input_path), "wacai.xlsx")
+writer = pd.ExcelWriter(output_path)
 df_outgo.to_excel(writer, sheet_name="支出", index=False)
 df_income.to_excel(writer, sheet_name="收入", index=False)
 df_transfer.to_excel(writer, sheet_name="转账", index=False)
 df_borrow.to_excel(writer, sheet_name="借入借出", index=False)
 df_refund.to_excel(writer, sheet_name="收款还款", index=False)
 writer.close()
-
-print(accounts)

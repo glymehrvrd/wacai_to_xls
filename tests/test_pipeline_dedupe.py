@@ -160,20 +160,25 @@ def test_apply_baseline_dedupe_detects_duplicates() -> None:
     assert record.skipped_reason == "duplicate-baseline"
 
 
-def test_supplement_card_remarks_matches_by_remark() -> None:
+def test_supplement_card_remarks_matches_by_merchant() -> None:
+    """测试通过商家匹配：银行卡账单商家为"财付通-一码通行"，微信账单商家为"一码通行"."""
     timestamp = datetime(2025, 10, 12, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     wallet_record = _make_record(
         timestamp=timestamp,
         account="微信",
         remark="订单B",
         channel="wechat",
-        extras={"source_extras": {"支付方式": "中信银行信用卡(1129)", "状态": "支付成功"}},
+        extras={
+            "merchant": "一码通行",
+            "source_extras": {"支付方式": "中信银行信用卡(1129)", "状态": "支付成功"},
+        },
     )
     card_record = _make_record(
         timestamp=timestamp + timedelta(minutes=5),
         account="中信银行信用卡(1129)",
         remark="订单B",
         channel="citic",
+        extras={"merchant": "财付通-一码通行"},
     )
 
     supplement_card_remarks(
@@ -183,24 +188,61 @@ def test_supplement_card_remarks_matches_by_remark() -> None:
     )
 
     assert "来源补充(" in card_record.remark
-    assert "支付成功" in card_record.remark
+    # 补充内容不包含状态信息
+    assert "支付成功" not in card_record.remark
     assert card_record.meta.supplemented_from == "wechat"
 
 
+def test_supplement_card_remarks_matches_alipay_merchant() -> None:
+    """测试支付宝商家匹配：银行卡账单商家为"支付宝-商户B"，支付宝账单商家为"商户B"."""
+    timestamp = datetime(2025, 10, 12, 11, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    wallet_record = _make_record(
+        timestamp=timestamp,
+        account="支付宝",
+        remark="订单D",
+        channel="alipay",
+        extras={
+            "merchant": "商户B",
+            "source_extras": {"支付方式": "中信银行信用卡(1129)", "状态": "交易成功"},
+        },
+    )
+    card_record = _make_record(
+        timestamp=timestamp + timedelta(minutes=5),
+        account="中信银行信用卡(1129)",
+        remark="订单D",
+        channel="citic",
+        extras={"merchant": "支付宝-商户B"},
+    )
+
+    supplement_card_remarks(
+        [wallet_record, card_record],
+        amount_tolerance=Decimal("0.01"),
+        date_tolerance=timedelta(hours=2),
+    )
+
+    assert "来源补充(" in card_record.remark
+    assert card_record.meta.supplemented_from == "alipay"
+
+
 def test_supplement_card_remarks_skips_when_pay_method_mismatch() -> None:
+    """测试支付方式不匹配时跳过补充."""
     timestamp = datetime(2025, 10, 13, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     wallet_record = _make_record(
         timestamp=timestamp,
         account="微信",
         remark="订单C",
         channel="wechat",
-        extras={"source_extras": {"支付方式": "零钱"}},
+        extras={
+            "merchant": "商户A",
+            "source_extras": {"支付方式": "零钱"},
+        },
     )
     card_record = _make_record(
         timestamp=timestamp + timedelta(minutes=3),
         account="中信银行信用卡(1129)",
         remark="订单C",
         channel="citic",
+        extras={"merchant": "财付通-商户A"},
     )
 
     supplement_card_remarks(

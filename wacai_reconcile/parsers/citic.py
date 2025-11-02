@@ -25,17 +25,13 @@ def parse_citic(path: Path) -> List[StandardRecord]:
         merchant_name = normalize_text(merchant_name)
         tail = normalize_text(row.get("卡末四位"))
         account_name = f"中信银行信用卡({tail})" if tail else "中信银行信用卡"
-        remark_items = []
-        posting_date = normalize_text(row.get("入账日期"))
-        if posting_date:
-            remark_items.append(f"入账: {posting_date}")
-        remark = "; ".join(remark_items)
+        remark = ""
         if to_decimal(amount) <= 0:
             record = create_income_record(
                 amount=abs(to_decimal(amount)),
                 timestamp=row.get("交易日期"),
                 account=account_name,
-                remark="退款/还款",
+                remark=remark,
                 payer=description,
                 category="退款返款",
             )
@@ -53,7 +49,7 @@ def parse_citic(path: Path) -> List[StandardRecord]:
                 record.meta.merchant = merchant_name
         if record is None:
             continue
-        record.meta.matching_key = merchant_name or normalize_text(description)
+        record.meta.matching_key = merchant_name or description
         record.raw_id = f"{row.get('交易日期')}_{description}"
         annotate_source(record, {})
         records.append(record)

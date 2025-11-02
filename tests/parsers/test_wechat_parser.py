@@ -318,3 +318,77 @@ def test_wechat_remark_only_keeps_product_field(tmp_path: Path) -> None:
     record3 = next(record for record in records if record.raw_id == "ID_INCOME")
     assert record3.remark.startswith("商品C")
     assert "备注内容C" not in record3.remark
+
+
+def test_wechat_meaningless_remark_cleared(tmp_path: Path) -> None:
+    """测试无意义备注的记录保留，但备注被清空."""
+    file_path = tmp_path / "wechat_meaningless.xlsx"
+    rows = [
+        {
+            "收/支": "支出",
+            "金额(元)": 10.0,
+            "交易时间": "2025-10-11 12:00:00",
+            "备注": "备注内容A",
+            "当前状态": "支付成功",
+            "商品": "商品A",
+            "交易对方": "商户A",
+            "交易单号": "ID_VALID",
+            "支付方式": "零钱",
+        },
+        {
+            "收/支": "支出",
+            "金额(元)": 20.0,
+            "交易时间": "2025-10-11 12:05:00",
+            "备注": "备注内容B",
+            "当前状态": "支付成功",
+            "商品": "none",  # 无意义备注
+            "交易对方": "商户B",
+            "交易单号": "ID_NONE",
+            "支付方式": "零钱",
+        },
+        {
+            "收/支": "收入",
+            "金额(元)": 30.0,
+            "交易时间": "2025-10-11 12:10:00",
+            "备注": "备注内容C",
+            "当前状态": "收款成功",
+            "商品": "\\",  # 无意义备注
+            "交易对方": "商户C",
+            "交易单号": "ID_BACKSLASH",
+            "支付方式": "零钱",
+        },
+        {
+            "收/支": "/",
+            "金额(元)": 100.0,
+            "交易时间": "2025-10-11 12:15:00",
+            "备注": "转账备注",
+            "当前状态": "支付成功",
+            "商品": "/",  # 无意义备注
+            "交易类型": "零钱充值",
+            "交易对方": "商户D",
+            "交易单号": "ID_TRANSFER",
+            "支付方式": "中信银行信用卡(1129)",
+        },
+    ]
+    _write_wechat_file(file_path, rows)
+
+    records = parse_wechat(file_path)
+
+    # 应该保留所有4条记录
+    assert len(records) == 4
+
+    # 验证有效记录
+    valid_record = next(record for record in records if record.raw_id == "ID_VALID")
+    assert valid_record.remark == "商品A"
+
+    # 验证无意义备注的记录保留，但备注被清空
+    none_record = next(record for record in records if record.raw_id == "ID_NONE")
+    assert none_record.remark == ""
+
+    backslash_record = next(record for record in records if record.raw_id == "ID_BACKSLASH")
+    assert backslash_record.remark == ""
+
+    # 验证转账记录保留，但备注被清空
+    transfer_record = next(record for record in records if record.raw_id == "ID_TRANSFER")
+    assert transfer_record.sheet.value == "转账"
+    assert transfer_record.remark == ""

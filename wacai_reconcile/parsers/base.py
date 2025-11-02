@@ -15,7 +15,7 @@ CARD_KEYWORDS_LOWER = ("visa", "mastercard", "amex", "american express", "discov
 
 def is_wallet_funded(payment: str, wallet_keywords: Tuple[str, ...]) -> bool:
     """Return True when the支付方式 looks like wallet/余额，而非直接刷卡."""
-    normalized = normalize_text(payment)
+    normalized = payment
     if any(keyword in normalized for keyword in wallet_keywords):
         return True
     lowered = normalized.lower()
@@ -58,8 +58,8 @@ def create_expense_record(
     )
     record.meta.base_remark = remark
     if merchant:
-        record.meta.merchant = normalize_text(merchant)
-    record.meta.matching_key = record.meta.matching_key or normalize_text(merchant) or normalize_text(remark)
+        record.meta.merchant = merchant
+    record.meta.matching_key = record.meta.matching_key or merchant or remark
     return record
 
 
@@ -87,8 +87,8 @@ def create_income_record(
     )
     record.meta.base_remark = remark
     if payer:
-        record.meta.merchant = normalize_text(payer)
-    record.meta.matching_key = record.meta.matching_key or normalize_text(payer) or normalize_text(remark)
+        record.meta.merchant = payer
+    record.meta.matching_key = record.meta.matching_key or payer or remark
     return record
 
 
@@ -121,7 +121,7 @@ def create_transfer_record(
         in_amount=dec_amount,
     )
     record.meta.base_remark = remark
-    record.meta.matching_key = record.meta.matching_key or normalize_text(remark)
+    record.meta.matching_key = record.meta.matching_key or remark
     return record
 
 

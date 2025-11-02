@@ -132,66 +132,96 @@ def supplement_card_remarks(
     amount_tolerance: Decimal,
     date_tolerance: timedelta,
 ) -> None:
-    """Enrich card账单备注 with wallet来源备注，便于理解交易含义。"""
-    wallet_channels = {"wechat", "alipay"}
-    card_channels = {"citic", "cmb"}
-    wallet_records = [wallet for wallet in records if wallet.meta.channel in wallet_channels and not wallet.canceled]
-    wallet_by_remark: Dict[str, List[StandardRecord]] = {}
-    for wallet in wallet_records:
-        key = wallet.meta.base_remark or wallet.remark
-        if not key:
-            continue
-        wallet_by_remark.setdefault(key, []).append(wallet)
+    """Enrich card账单备注 with wallet来源备注，便于理解交易含义。
 
+    匹配算法流程：
+    1. 建立钱包记录索引：按商家名称（meta.merchant）建立倒排索引，方便快速查找
+    2. 遍历卡片记录，对每条记录执行匹配：
+       a. 通过商家匹配：银行卡账单商家格式为"财付通-xxx"或"支付宝-xxx"，去掉前缀后与钱包商家匹配
+       b. 支付方式匹配：钱包记录的支付方式必须包含卡片账户名（支持完整匹配或根账户匹配）
+       c. 方向匹配：需满足以下条件之一：
+          - 方向一致（支出对支出，收入对收入）
+          - 退款匹配：卡片为收入且钱包为支出，且钱包状态包含退款关键词（退款/关闭/退回）
+       d. 时间匹配：钱包和卡片的时间差需在容差范围内
+       e. 金额匹配：钱包和卡片的金额差需在容差范围内
+    3. 匹配成功后将钱包记录的备注补充到卡片记录中，格式：现有备注; 来源补充(渠道): 补充内容
+    """
+    wallet_channels = {"wechat", "alipay"}
+
+    # 步骤1：建立钱包记录的倒排索引（按商家索引）
+    # 用于快速查找与卡片记录商家匹配的钱包记录
+    wallet_records = [wallet for wallet in records if wallet.meta.channel in wallet_channels and not wallet.canceled]
+    wallet_by_merchant: Dict[str, List[StandardRecord]] = {}
+    for wallet in wallet_records:
+        merchant = wallet.meta.merchant
+        if not merchant:
+            continue
+        wallet_by_merchant.setdefault(merchant, []).append(wallet)
+
+    # 步骤2：遍历卡片记录，查找匹配的钱包记录并补充备注
     for record in records:
         if record.canceled:
             continue
         if record.skipped_reason and record.skipped_reason != "channel-duplicate":
             continue
-        if record.meta.channel not in card_channels:
+        if record.meta.channel in wallet_channels:
             continue
-        base_remark = record.meta.base_remark or record.remark
-        if not base_remark:
+
+        # 获取卡片记录的商家名称（可能是银行卡账单中的"财付通-xxx"或"支付宝-xxx"格式）
+        card_merchant = record.meta.merchant
+        if not card_merchant:
             continue
+
+        # 2a. 通过商家匹配：银行卡账单商家格式为"财付通-xxx"或"支付宝-xxx"
+        # 去掉前缀后与钱包商家匹配
+        # 例如：银行卡"财付通-一码通行" -> "一码通行"，与微信商家"一码通行"匹配
+        #      银行卡"支付宝-xxx" -> "xxx"，与支付宝商家"xxx"匹配
+        merchant_normalized = card_merchant
+        if card_merchant.startswith("财付通-"):
+            merchant_normalized = card_merchant[4:]  # 去掉"财付通-"前缀
+        elif card_merchant.startswith("支付宝-"):
+            merchant_normalized = card_merchant[4:]  # 去掉"支付宝-"前缀
+
         card_account = record.account
         account_root = card_account.split("(")[0].strip() if card_account else ""
-        for wallet in wallet_by_remark.get(base_remark, []):
+        for wallet in wallet_by_merchant.get(merchant_normalized, []):
+            # 2b. 支付方式匹配：钱包的支付方式必须包含卡片账户名
+            # 支持完整匹配（如"中信银行信用卡(1129)"）或根账户匹配（如"中信银行信用卡"）
             pay_method = wallet.meta.source_extras.get("支付方式", "")
             if card_account and card_account not in pay_method:
                 if account_root and account_root not in pay_method:
-                    continue
-            status_text = wallet.meta.source_extras.get("状态", "")
-            base_text = wallet.meta.base_remark or ""
-            base_parts = [
-                part.strip() for part in base_text.split(";") if part.strip() and part.strip().lower() != "nan"
-            ]
-            supplement_candidates = base_parts.copy()
-            if status_text:
-                supplement_candidates.append(f"状态: {status_text}")
-            supplement_text = "; ".join(dict.fromkeys(supplement_candidates))
+                    continue  # 支付方式不匹配，跳过该钱包记录
+
+            # 2c. 方向匹配：检查方向是否一致
             direction_match = record.direction == wallet.direction
-            refund_match = (
-                record.direction == "income"
-                and wallet.direction == "expense"
-                and any(keyword in (supplement_text or "") + status_text for keyword in ("退款", "关闭", "退回"))
-            )
-            if not direction_match and not refund_match:
-                continue
+            if not direction_match:
+                continue  # 方向不匹配，跳过
+
+            # 2d. 时间匹配：检查时间差是否在容差范围内
             if abs((wallet.timestamp - record.timestamp).total_seconds()) > date_tolerance.total_seconds():
-                continue
+                continue  # 时间差超出容差，跳过
+
+            # 2e. 金额匹配：检查金额差是否在容差范围内
             if abs(wallet.amount - record.amount) > amount_tolerance:
-                continue
-            supplement = supplement_text or wallet.meta.base_remark or wallet.remark
+                continue  # 金额差超出容差，跳过
+
+            # 步骤3：匹配成功，准备补充备注
+            # 补充内容不包含状态信息，只使用 base_remark
+            supplement = wallet.meta.base_remark or ""
             if not supplement:
-                continue
+                continue  # 没有可补充的内容，跳过
+
             existing = record.remark or ""
+            # 避免重复补充：如果补充内容已存在且已有"来源补充"标记，则跳过
             if supplement in existing and "来源补充(" in existing:
                 break
+
+            # 添加补充备注，格式：现有备注; 来源补充(渠道): 补充内容
             channel_label = wallet.meta.channel_label or "未知渠道"
             prefix = f"来源补充({channel_label}): "
             record.remark = f"{existing}; {prefix}{supplement}" if existing else f"{prefix}{supplement}"
             record.meta.supplemented_from = wallet.meta.channel
-            break
+            break  # 找到一个匹配后停止查找
 
 
 def reconcile(options: ReconcileOptions) -> ReconcileResult:
