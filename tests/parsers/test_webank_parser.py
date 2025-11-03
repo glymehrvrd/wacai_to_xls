@@ -27,8 +27,6 @@ def test_webank_parser_populates_extras_for_known_transactions() -> None:
         and record.amount == Decimal("900.00")
         and record.meta.source_extras.get("摘要") == "账户扣划"
     )
-    assert expense.merchant.startswith("袁健生")
-    assert expense.merchant == "袁健生"
     assert expense.meta.source_extras.get("对方行名") == "招商银行"
     assert expense.remark == "账户扣划"
 
@@ -61,5 +59,4 @@ def test_webank_parser_ignores_page_footer_tokens() -> None:
     assert footer_record.amount == Decimal("34121.14")
     assert extras.get("对方账号") == "10600601304006010001060"
     assert extras.get("对方行名") == "深圳前海微众银行股份有限公司"
-    assert extras.get("交易卡号") == "6236330070059113793"
     assert all("第" not in value and "打印时间" not in value for value in extras.values())

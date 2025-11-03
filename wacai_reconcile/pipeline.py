@@ -17,7 +17,7 @@ from .io_utils import (
     write_wacai_workbook,
 )
 from .models import SheetBundle, StandardRecord
-from .parsers import parse_alipay, parse_citic, parse_cmb, parse_webank, parse_wechat
+from .parsers import parse_alipay, parse_citic, parse_cmb, parse_cmb_debit, parse_webank, parse_wechat
 from .refund import apply_refund_pairs
 from .schema import DEFAULT_AMOUNT_TOLERANCE, DEFAULT_DATE_TOLERANCE, DEFAULT_REFUND_WINDOW, SHEET_COLUMNS
 
@@ -59,6 +59,7 @@ CHANNEL_FILES = {
     "citic": ("中信银行信用卡", parse_citic, ["中信银行信用卡", "citic"]),
     "cmb": ("招商银行信用卡", parse_cmb, ["招商银行信用卡", "cmb"]),
     "webank": ("微众银行", parse_webank, ["微众银行", "webank"]),
+    "cmb_debit": ("招商银行储蓄卡", parse_cmb_debit, ["招商银行交易流水", "cmb-debit"]),
 }
 
 
