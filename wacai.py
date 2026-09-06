@@ -1,9 +1,18 @@
 # -*- coding: utf-8 -*-
+# 版本说明：13.0.9 及以后版本使用 app_database.db 作为挖财数据源。
 import pandas as pd
 import sqlite3
 from datetime import datetime
 import sys
 import os
+
+
+def report_failure(exc_type, exc_value, exc_traceback):
+    print(f"执行失败：{exc_value}", file=sys.stderr)
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
+sys.excepthook = report_failure
 
 
 def parse_account(account_uuid, accounts):
@@ -22,7 +31,7 @@ if len(sys.argv) != 2:
 
 # if file not exists, exit
 if not os.path.isfile(sys.argv[1]):
-    print("File not found: %s" % sys.argv[1])
+    print("执行失败：文件不存在：%s" % sys.argv[1])
     sys.exit(1)
 
 conn = sqlite3.connect(sys.argv[1])
@@ -69,14 +78,17 @@ dd_refund = []
 
 for _, row in df.iterrows():
     try:
-        if row["isdelete"] == 1:
+        # Newer app_database.db exports use camelCase column names while
+        # older wacai365.so files use the original lowercase names.
+        is_deleted = row.get("isdelete", row.get("isDelete", 0))
+        if is_deleted == 1:
             continue
 
         book = books[row["bookUuid"]]
         account, fee_type = parse_account(row["accountUuid"], accounts)
         dd = datetime.fromtimestamp(row["date"]).strftime("%Y-%m-%d %H:%M:%S")
 
-        tradetype = row["tradetype"]
+        tradetype = row.get("tradetype", row.get("tradeType"))
         if tradetype == 1:
             # outcome
             maintyp = outgomaintype[outgosubtomain[row["typeUuid"]]]
@@ -243,3 +255,4 @@ df_transfer.to_excel(writer, sheet_name="转账", index=False)
 df_borrow.to_excel(writer, sheet_name="借入借出", index=False)
 df_refund.to_excel(writer, sheet_name="收款还款", index=False)
 writer.close()
+print(f"执行成功，输出路径：{os.path.abspath(output_path)}")
